@@ -54,6 +54,10 @@ function App() {
   const [connectionModalTab, setConnectionModalTab] = useState("pac"); // pac | manual
   const [copiedField, setCopiedField] = useState(null);
   const [showLargeQr, setShowLargeQr] = useState(false);
+  const [platform, setPlatform] = useState("windows");
+  const isWindows = platform === "windows";
+  const isLinux = platform === "linux";
+  const manualProxyHost = isLinux ? "127.0.0.1" : lanIp;
 
   const handleCopyField = async (text, fieldName) => {
     try {
@@ -93,6 +97,13 @@ function App() {
 
   // Check Admin on Mount
   useEffect(() => {
+    invoke("get_platform")
+      .then((result) => setPlatform(result || "unknown"))
+      .catch((err) => {
+        console.warn("Platform detection failed:", err);
+        setPlatform("unknown");
+      });
+
     invoke("check_admin")
       .then((result) => {
         setIsAdmin(result);
@@ -488,7 +499,7 @@ function App() {
   };
 
   // Port açık mı? Rust ile TCP bağlantı dener
-  const waitForPort = async (port, maxAttempts = APP.portCheckMaxAttempts) => {
+  const waitForPort = async (port, maxAttempts = APP.portCheckMaxAttempts, delayMs = 200) => {
     for (let i = 0; i < maxAttempts; i++) {
       try {
         const open = await invoke("check_port_open", { port });
@@ -496,7 +507,7 @@ function App() {
       } catch (e) {
         console.warn("Port check error:", e);
       }
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, delayMs));
     }
     return false;
   };
@@ -527,7 +538,7 @@ function App() {
     try {
       configData = await invoke("get_sidecar_config", {
         allowLanSharing: configRef.current.lanSharing || false,
-        enableGameMode: configRef.current.enableWinhttp !== false,
+        enableGameMode: isWindows && configRef.current.enableWinhttp !== false,
       });
       port = configData.port;
       bindAddr = configData.bind_address;
@@ -577,13 +588,21 @@ function App() {
 
       const listenAddr = `${bindAddr}:${port}`;
 
-      const args =[
-        "--clean", 
-        "--listen-addr", listenAddr,
-        "--timeout", TIMEOUT_MS.toString(),
-        "--silent",
-        "--log-level", "info",
-      ];
+      const args = isLinux
+        ? [
+            "--clean",
+            "--listen-addr", listenAddr,
+            "--tcp-timeout", TIMEOUT_MS.toString(),
+            "--no-tui",
+            "--log-level", "info",
+          ]
+        : [
+            "--clean",
+            "--listen-addr", listenAddr,
+            "--timeout", TIMEOUT_MS.toString(),
+            "--silent",
+            "--log-level", "info",
+          ];
 
       // IPv4 Zorlaması (Sende çalışan stabil yapı)
       if (configRef.current.ipv4Only !== false) {
@@ -614,10 +633,10 @@ function App() {
         : "2";
 
       // 🛑 Önemli: Sürücü kontrolü yap (Rust tarafındaki check_driver komutunu kullan)
-      const hasDriver = await invoke('check_driver');
+      const hasDriver = isWindows ? await invoke('check_driver') : false;
       
       if (dpiMethod === "2") {
-        const advancedBypass = configRef.current.advancedBypass !== false; // default true if driver installed
+        const advancedBypass = isWindows && configRef.current.advancedBypass !== false; // default true if driver installed
         if (hasDriver && advancedBypass) {
           // Sürücü var ve gelişmiş bypass açık: Fake packet ile en güçlü atlatma
           args.push("--https-split-mode", "chunk", "--https-chunk-size", "1", "--https-fake-count", "3");
@@ -625,10 +644,12 @@ function App() {
         } else {
           // Sürücü yok veya gelişmiş bypass kapalı: Sadece Chunk 1
           args.push("--https-split-mode", "chunk", "--https-chunk-size", "1");
-          if (!hasDriver) {
+          if (isWindows && !hasDriver) {
             addLog(t.logStrongNoDriver || "⚠️ Güçlü Mod: Sürücü yok, sadece Chunk-1 aktif.", "warn");
-          } else {
+          } else if (isWindows) {
             addLog(t.logStrongChunkOnly || "🛡️ Güçlü Mod: Chunk-1 aktif.", "info");
+          } else {
+            addLog("Linux MVP: Güçlü Mod Chunk-1 ile çalışıyor. Sistem proxy uygulanamazsa manuel proxy kullanın.", "info");
           }
         }
       } else if (dpiMethod === "1") {
@@ -640,7 +661,120 @@ function App() {
       const command = Command.sidecar("binaries/bypax-proxy", args);
 
       let connectionConfirmed = false;
+      let connectionFinalizing = false;
       let isReady = false;
+
+      const startPacIfEnabled = async (activePort) => {
+        if (!configRef.current.lanSharing) return;
+
+        try {
+          const pacResult = await invoke("start_pac_server", { proxyPort: activePort });
+          if (pacResult?.pac_port) setPacPort(pacResult.pac_port);
+          addLog(t.logPacStarted, "success", { i18nKey: "logPacStarted" });
+        } catch (e) {
+          addLog(t.logPacStartError(e), "warn", {
+            i18nKey: "logPacStartError",
+            i18nParams: [e],
+          });
+        }
+      };
+
+      const completeConnection = async (source) => {
+        if (connectionConfirmed) {
+          addLog(`[connect] Frontend state update skipped (${source}); already connected.`, "info");
+          return true;
+        }
+
+        setCurrentPort(port);
+        currentPortRef.current = port;
+
+        let proxyResult = null;
+        try {
+          addLog(
+            `[connect] System proxy setup starting: platform=${platform}, host=${isLinux ? "127.0.0.1" : bindAddr}, port=${port}, winhttp=${isWindows && configRef.current.enableWinhttp !== false}`,
+            "info",
+          );
+          proxyResult = await invoke("set_system_proxy", {
+            port,
+            enableWinhttp: isWindows && configRef.current.enableWinhttp !== false,
+          });
+          addLog(
+            `[connect] System proxy setup result: automatic=${Boolean(proxyResult?.automatic)}, host=${proxyResult?.host || "127.0.0.1"}, port=${proxyResult?.port || port}`,
+            proxyResult?.automatic ? "success" : "warn",
+          );
+        } catch (err) {
+          if (!isLinux) {
+            addLog(t.logProxySetError(err), "error", {
+              i18nKey: "logProxySetError",
+              i18nParams: [err],
+            });
+            return false;
+          }
+
+          addLog(
+            `[connect] Linux system proxy setup failed; continuing in manual mode at 127.0.0.1:${port}: ${err}`,
+            "warn",
+          );
+        }
+
+        if (proxyResult?.automatic) {
+          addLog(t.logProxySet(port), "success", {
+            i18nKey: "logProxySet",
+            i18nParams: [port],
+          });
+        } else {
+          const fallbackMessage = proxyResult?.message || `Manual proxy fallback: set HTTP/HTTPS proxy to 127.0.0.1:${port}`;
+          addLog(fallbackMessage, "warn");
+          if (isLinux) {
+            setConnectionModalTab("manual");
+            setShowConnectionModal(true);
+          }
+        }
+
+        if (isWindows && configRef.current.enableWinhttp !== false) {
+          addLog(t.logWinHttpEnabled, "warn", { i18nKey: "logWinHttpEnabled" });
+        }
+
+        // ✅ Başarılı bağlantı - retry mekanizmasını sıfırla
+        retryCount.current = 0;
+        userIntentDisconnect.current = false;
+        connectionConfirmed = true;
+
+        addLog(`[connect] Frontend state update: connected (${source}).`, "success");
+        setIsConnected(true);
+        setIsProcessing(false);
+        addLog(t.logConnected, "success", { i18nKey: "logConnected" });
+        notifyUser("Bypax", t.logConnected, "connect");
+        updateTrayTooltip("connected");
+        await startPacIfEnabled(port);
+        return true;
+      };
+
+      const runLinuxProxyHealthCheck = async () => {
+        addLog(`[connect] Linux port health check: waiting up to 3s for 127.0.0.1:${port}.`, "info");
+        const portReady = await waitForPort(port, 15, 200);
+        if (!portReady) {
+          addLog(`[connect] Linux port health check failed: 127.0.0.1:${port} is not listening.`, "error");
+          return false;
+        }
+
+        addLog(`[connect] Linux port health check passed: 127.0.0.1:${port} is listening.`, "success");
+
+        try {
+          addLog(`[connect] Linux proxy health check: CONNECT example.com:443 through 127.0.0.1:${port}.`, "info");
+          const health = await invoke("check_proxy_health", { port });
+          const statusLine = health?.statusLine || "no status line";
+          const ok = Boolean(health?.portOpen && health?.proxyOk);
+          addLog(
+            `[connect] Linux proxy health check result: portOpen=${Boolean(health?.portOpen)}, proxyOk=${Boolean(health?.proxyOk)}, status="${statusLine}".`,
+            ok ? "success" : "error",
+          );
+          return ok;
+        } catch (err) {
+          addLog(`[connect] Linux proxy health check command failed: ${err}`, "error");
+          return false;
+        }
+      };
 
       // Optimized regex pattern - compiled once (regex literal / karışmasın diye string + new RegExp)
       const SKIP_PATTERN = new RegExp(
@@ -658,6 +792,9 @@ function App() {
         const lowerLine = line.toLowerCase();
 
         if (trimmedLine.length === 0) return;
+        if (isLinux) {
+          addLog(`[sidecar ${type === "warn" ? "stderr" : "stdout"}] ${trimmedLine}`, type === "warn" ? "warn" : "info");
+        }
         if (/^(DBG|INF|WRN|ERR)\s+\d{4}-/.test(trimmedLine)) return;
         if (line.includes("888")) return;
         if (isTunnelShutdownNoise(line)) return;
@@ -675,7 +812,7 @@ function App() {
           lowerLine.includes("couldn't load wpcap.dll") ||
           lowerLine.includes("error starting network detector");
 
-        if (isWpcapError) {
+        if (isWindows && isWpcapError) {
           fatalErrorRef.current = true;
           friendlyKey = "logWpcapMissing";
         }
@@ -726,11 +863,12 @@ function App() {
         }
 
         // Wait for port to be actually ready (listener log geldikten sonra kısa bekle; SpoofDPI 1.2.1 bazen geç bind ediyor)
-        if (!connectionConfirmed && isReady) {
-          connectionConfirmed = true;
+        if (!isLinux && !connectionConfirmed && !connectionFinalizing && isReady) {
+          connectionFinalizing = true;
           await new Promise((r) => setTimeout(r, 400));
           const portReady = await waitForPort(port);
           if (!portReady) {
+            connectionFinalizing = false;
             addLog(t.logPortRetryOpen(port), "warn", {
               i18nKey: "logPortRetryOpen",
               i18nParams: [port],
@@ -750,50 +888,8 @@ function App() {
             return;
           }
 
-          setCurrentPort(port);
-          currentPortRef.current = port;
-          try {
-            await invoke("set_system_proxy", { port, enableWinhttp: configRef.current.enableWinhttp !== false });
-            addLog(t.logProxySet(port), "success", {
-              i18nKey: "logProxySet",
-              i18nParams: [port],
-            });
-            if (configRef.current.enableWinhttp !== false) {
-              addLog(t.logWinHttpEnabled, "warn", { i18nKey: "logWinHttpEnabled" });
-            }
-          } catch (err) {
-            addLog(t.logProxySetError(err), "error", {
-              i18nKey: "logProxySetError",
-              i18nParams: [err],
-            });
-            return;
-          }
-
-          // ✅ Başarılı bağlantı - retry mekanizmasını sıfırla
-          retryCount.current = 0;
-          userIntentDisconnect.current = false;
-
-          setIsConnected(true);
-          setIsProcessing(false);
-          addLog(t.logConnected, "success", { i18nKey: "logConnected" });
-          notifyUser("Bypax", t.logConnected, "connect");
-          updateTrayTooltip("connected");
-          if (configRef.current.lanSharing) {
-            (async () => {
-              try {
-                const pacResult = await invoke("start_pac_server", { proxyPort: port });
-                if (pacResult?.pac_port) setPacPort(pacResult.pac_port);
-                addLog(t.logPacStarted, "success", {
-                  i18nKey: "logPacStarted",
-                });
-              } catch (e) {
-                addLog(t.logPacStartError(e), "warn", {
-                  i18nKey: "logPacStartError",
-                  i18nParams: [e],
-                });
-              }
-            })();
-          }
+          await completeConnection("sidecar readiness log");
+          connectionFinalizing = false;
         }
 
         const isPortError = isPortInUse;
@@ -880,7 +976,7 @@ function App() {
           updateTrayTooltip("disconnected"); // ✅ Bağlantı koptu (geçici)
 
           // ✅ Hızlı crash tespiti: Güçlü Mod + Fake Paket crash’i ise Npcap sorunu (Ölümcül hatayı override et)
-          const isStrongWithFake = configRef.current.dpiMethod === '2' && configRef.current.advancedBypass !== false;
+          const isStrongWithFake = isWindows && configRef.current.dpiMethod === '2' && configRef.current.advancedBypass !== false;
           if (fatalErrorRef.current && isStrongWithFake) {
             addLog(t.logNpcapFallback || "⚠️ Npcap sürücüsü yanıt vermiyor. Gelişmiş bypass kapatılıp tekrar deneniyor...", "warn");
             configRef.current = { ...configRef.current, advancedBypass: false };
@@ -917,66 +1013,54 @@ function App() {
       command.stderr.on("data", (line) => handleOutput(line, "warn"));
       command.stdout.on("data", (line) => handleOutput(line, "info"));
 
+      addLog("[connect] Sidecar spawn: binaries/bypax-proxy", "info");
+      addLog(`[connect] Sidecar args: ${JSON.stringify(args)}`, "info");
       const child = await command.spawn();
       childProcess.current = child;
+      addLog(`[connect] Sidecar spawned with pid=${child.pid ?? "unknown"}.`, "success");
       invoke("save_sidecar_pid", { pid: child.pid }).catch(console.warn);
       isStartingEngine.current = false; // Mülkiyeti childProcess'e devret
 
-      // Failsafe timeout
-      setTimeout(async () => {
-        if (
-          childProcess.current &&
-          !connectionConfirmed &&
-          !isRetrying.current
-        ) {
-          // P1-FIX: Proxy'yi Windows'a yazmadan önce uygulamanın gerçekten port dinlediğini TCP ile doğrula
-          const portReady = await waitForPort(port, 3);
-          if (!portReady) {
-            addLog(t.logFailsafePortClosed || "Beklenmeyen Hata: Proxy başlatılamadı", "error");
-            if (childProcess.current) {
+      if (isLinux) {
+        (async () => {
+          const healthy = await runLinuxProxyHealthCheck();
+          if (!healthy) {
+            if (childProcess.current && !connectionConfirmed && !isRetrying.current) {
               childProcess.current.kill().catch(() => {});
               childProcess.current = null;
             }
+            setIsConnected(false);
             setIsProcessing(false);
+            updateTrayTooltip("disconnected");
             return;
           }
 
-          connectionConfirmed = true;
-          setCurrentPort(port);
-          currentPortRef.current = port;
-
-          try {
-            await invoke("set_system_proxy", { port: port, enableWinhttp: configRef.current.enableWinhttp !== false });
-          } catch (err) {
-            addLog(t.logProxySetError(err), "error", {
-              i18nKey: "logProxySetError",
-              i18nParams: [err],
-            });
-          }
-
-          // ✅ Başarılı bağlantı - retry mekanizmasını sıfırla
-          retryCount.current = 0;
-          userIntentDisconnect.current = false;
-
-          setIsConnected(true);
-          setIsProcessing(false);
-          addLog(t.logConnected, "info", { i18nKey: "logConnected" });
-          notifyUser("BypaxDPI", t.logConnected, "connect");
-          updateTrayTooltip("connected"); // ✅ Auto-connect başarılı
-          if (configRef.current.lanSharing) {
-            try {
-              const pacResult = await invoke("start_pac_server", { proxyPort: port });
-              if (pacResult?.pac_port) setPacPort(pacResult.pac_port);
-              addLog(t.logPacStarted, "success", { i18nKey: "logPacStarted" });
-            } catch (e) {
-              addLog(t.logPacStartError(e), "warn", {
-                i18nKey: "logPacStartError",
-                i18nParams: [e],
-              });
+          await completeConnection("Linux proxy health check");
+        })();
+      } else {
+        // Failsafe timeout
+        setTimeout(async () => {
+          if (
+            childProcess.current &&
+            !connectionConfirmed &&
+            !isRetrying.current
+          ) {
+            // P1-FIX: Proxy'yi Windows'a yazmadan önce uygulamanın gerçekten port dinlediğini TCP ile doğrula
+            const portReady = await waitForPort(port, 3);
+            if (!portReady) {
+              addLog(t.logFailsafePortClosed || "Beklenmeyen Hata: Proxy başlatılamadı", "error");
+              if (childProcess.current) {
+                childProcess.current.kill().catch(() => {});
+                childProcess.current = null;
+              }
+              setIsProcessing(false);
+              return;
             }
+
+            await completeConnection("failsafe port check");
           }
-        }
-      }, DPI_TIMEOUTS[configRef.current.dpiMethod] ?? 5000); // Mod'a uygun failsafe timeout
+        }, DPI_TIMEOUTS[configRef.current.dpiMethod] ?? 5000); // Mod'a uygun failsafe timeout
+      }
     } catch (e) {
       isStartingEngine.current = false; // Lock release on start failure
       addLog(t.logEngineStartError(e), "error", {
@@ -986,12 +1070,14 @@ function App() {
 
       // ✅ Sorun 2: Antivirüs uyarısı — spawn başarısızsa Defender engellemiş olabilir
       const errStr = String(e).toLowerCase();
-      if (errStr.includes("denied") || errStr.includes("access") || errStr.includes("not found") || errStr.includes("os error")) {
+      if (isWindows && (errStr.includes("denied") || errStr.includes("access") || errStr.includes("not found") || errStr.includes("os error"))) {
         addLog(
           "⚠️ " + (t.logAntivirusWarning || "Windows Defender veya antivirüs yazılımınız 'bypax-proxy.exe' dosyasını engellemiş olabilir. Lütfen dosyayı antivirüs dışlama listesine (exclusion) ekleyin."),
           "warn",
           { i18nKey: "logAntivirusWarning" }
         );
+      } else if (isLinux && (errStr.includes("not found") || errStr.includes("os error"))) {
+        addLog("Linux sidecar bulunamadı. Önce `npm run build-proxy` komutuyla bypax-proxy-x86_64-unknown-linux-gnu dosyasını oluşturun.", "warn");
       }
       setIsConnected(false);
       setIsProcessing(false);
@@ -1135,7 +1221,7 @@ function App() {
   const [isApplyingSettings, setIsApplyingSettings] = useState(false);
   useEffect(() => {
     const chunkSize = config.httpsChunkSize ?? 4;
-    const winhttp = config.enableWinhttp !== false;
+    const winhttp = isWindows && config.enableWinhttp !== false;
     const ipv4 = config.ipv4Only !== false;
     if (
       prevDpiMethodRef.current === config.dpiMethod &&
@@ -1181,7 +1267,7 @@ function App() {
       setIsProcessing(true);
       startEngine(0);
     }, 2500); // Portun serbest kalması için (SpoofDPI 1.2.1 / TIME_WAIT)
-  }, [config.dpiMethod, config.httpsChunkSize, config.selectedDns, config.dnsMode, config.enableWinhttp, config.ipv4Only, isConnected]);
+  }, [config.dpiMethod, config.httpsChunkSize, config.selectedDns, config.dnsMode, config.enableWinhttp, config.ipv4Only, isConnected, isWindows]);
 
   useEffect(() => {
     // Initial cleanup on mount
@@ -2525,11 +2611,11 @@ function App() {
                         </label>
                         <div
                           className="code-box"
-                          onClick={() => handleCopyField(lanIp, 'host')}
+                          onClick={() => handleCopyField(manualProxyHost, 'host')}
                           title="Kopyala"
                           style={{ transition: 'all 0.2s', background: copiedField === 'host' ? 'rgba(34, 197, 94, 0.1)' : undefined, borderColor: copiedField === 'host' ? 'rgba(34, 197, 94, 0.3)' : undefined }}
                         >
-                          <span style={{ color: copiedField === 'host' ? '#4ade80' : undefined }}>{lanIp}</span>
+                          <span style={{ color: copiedField === 'host' ? '#4ade80' : undefined }}>{manualProxyHost}</span>
                           {copiedField === 'host' ? <Check size={16} color="#4ade80" /> : <Copy size={16} color="#71717a" />}
                         </div>
                       </div>
@@ -2800,6 +2886,7 @@ function App() {
           updateConfig={updateConfig}
           dnsLatencies={dnsLatencies}
           setDnsLatencies={setDnsLatencies}
+          platform={platform}
         />
       )}
     </div>

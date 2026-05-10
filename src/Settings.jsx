@@ -25,9 +25,10 @@ const Toggle = ({ checked, onChange }) => (
   </div>
 );
 
-const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies }) => {
+const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies, platform = 'windows' }) => {
   const [activeTab, setActiveTab] = useState('general');
   const scrollRef = useRef(null);
+  const isWindows = platform === 'windows';
 
   const[expandedISP, setExpandedISP] = useState(null);
   const [driverInstalled, setDriverInstalled] = useState(false);
@@ -35,8 +36,12 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
   const [showNpcapDetails, setShowNpcapDetails] = useState(false);
 
   useEffect(() => {
+    if (!isWindows) {
+      setDriverInstalled(false);
+      return;
+    }
     invoke('check_driver').then(setDriverInstalled);
-}, []);
+}, [isWindows]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -522,7 +527,7 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
 
                     {/* Npcap Gelişmiş Bypass — Güçlü Mod altında */}
                     <AnimatePresence>
-                      {config.dpiMethod === '2' && (
+                      {isWindows && config.dpiMethod === '2' && (
                         <motion.div
                           initial={{ opacity: 0, height: 0 }}
                           animate={{ opacity: 1, height: 'auto' }}
@@ -678,7 +683,7 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
                 <div className="v2-card">
                   
                   {/* YENİ EKLENEN IPv4 TOGGLE'I */}
-                  <div className="v2-item" style={{ padding: '1rem', borderBottom: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                  <div className="v2-item" style={{ padding: '1rem', borderBottom: isWindows ? '1px solid rgba(255, 255, 255, 0.05)' : 'none' }}>
                     <div className="v2-icon" style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444' }}>
                       <Activity size={20} />
                     </div>
@@ -691,16 +696,18 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies 
                   </div>
 
                   {/* YENİ: WinHTTP OYUN MODU TOGGLE'I */}
-                  <div className="v2-item" style={{ padding: '1rem' }}>
-                    <div className="v2-icon" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa' }}>
-                       <Youtube size={20} />
+                  {isWindows && (
+                    <div className="v2-item" style={{ padding: '1rem' }}>
+                      <div className="v2-icon" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa' }}>
+                         <Youtube size={20} />
+                      </div>
+                      <div className="v2-item-text">
+                        <h3 style={{ color: '#93c5fd' }}>{t.winHttpForceTitle}</h3>
+                        <p>{t.winHttpForceDesc}</p>
+                      </div>
+                      <Toggle checked={config.enableWinhttp !== false} onChange={(v) => updateConfig('enableWinhttp', v)} />
                     </div>
-                    <div className="v2-item-text">
-                      <h3 style={{ color: '#93c5fd' }}>{t.winHttpForceTitle}</h3>
-                      <p>{t.winHttpForceDesc}</p>
-                    </div>
-                    <Toggle checked={config.enableWinhttp !== false} onChange={(v) => updateConfig('enableWinhttp', v)} />
-                  </div>
+                  )}
 
                 </div>
               </div>

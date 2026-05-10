@@ -7,8 +7,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function main() {
-    const rceditModule = await import('rcedit');
-    const rcedit = rceditModule.rcedit || rceditModule.default;
     const exePath = path.join(__dirname, 'src-tauri', 'binaries', 'bypax-proxy-x86_64-pc-windows-msvc.exe');
     const pngPath = path.join(__dirname, 'public', 'bypax-engine.png');
     const iconPath = path.join(__dirname, 'src-tauri', 'icons', 'bypax-engine.ico');
@@ -32,6 +30,18 @@ async function main() {
         return;
     }
 
+    if (process.platform !== 'win32') {
+        console.log('Skipping Windows EXE icon update on non-Windows host.');
+        return;
+    }
+
+    if (!fs.existsSync(exePath)) {
+        console.log(`Skipping icon update because ${exePath} does not exist.`);
+        return;
+    }
+
+    const rceditModule = await import('rcedit');
+    const rcedit = rceditModule.rcedit || rceditModule.default;
     console.log(`Updating icon for ${exePath} using ${iconPath}`);
 
     try {
