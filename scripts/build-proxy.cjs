@@ -16,26 +16,43 @@ const targetTriple = process.env.TAURI_TARGET_TRIPLE
 const outName = isWindows ? 'bypax-proxy.exe' : 'bypax-proxy';
 const outFile = path.join(root, 'spoofdpi', outName);
 
-if (!fs.existsSync(path.join(spoofDpiDir, 'go.mod'))) {
-  console.error('SpoofDPI-1.2.1 source not found at', spoofDpiDir);
-  process.exit(1);
-}
-
 const spoofdpiDir = path.join(root, 'spoofdpi');
 if (!fs.existsSync(spoofdpiDir)) {
   fs.mkdirSync(spoofdpiDir, { recursive: true });
 }
 
-console.log(`Building SpoofDPI (bypax-proxy) for ${targetTriple} with release flags...`);
-const go = spawnSync('go', ['build', '-trimpath', '-ldflags=-s -w', '-o', outFile, './cmd/spoofdpi'], {
-  cwd: spoofDpiDir,
-  stdio: 'inherit',
-  shell: true,
-});
+const spoofDpiSourceExists = fs.existsSync(path.join(spoofDpiDir, 'go.mod'));
+if (spoofDpiSourceExists) {
+  console.log(`Building SpoofDPI (bypax-proxy) for ${targetTriple} with release flags...`);
+  const go = spawnSync('go', ['build', '-trimpath', '-ldflags=-s -w', '-o', outFile, './cmd/spoofdpi'], {
+    cwd: spoofDpiDir,
+    stdio: 'inherit',
+    shell: true,
+  });
 
-if (go.status !== 0) {
-  console.error('go build failed');
-  process.exit(go.status || 1);
+  if (go.status !== 0) {
+    console.error('go build failed');
+    process.exit(go.status || 1);
+  }
+} else if (!isWindows) {
+  const which = spawnSync('command', ['-v', 'spoofdpi'], {
+    shell: true,
+    encoding: 'utf8',
+  });
+  const systemSpoofDpi = which.stdout.trim();
+
+  if (!systemSpoofDpi) {
+    console.error('SpoofDPI source not found at', spoofDpiDir);
+    console.error('System spoofdpi binary not found in PATH. Install spoofdpi or provide SpoofDPI source before packaging.');
+    process.exit(1);
+  }
+
+  console.log(`SpoofDPI source not found at ${spoofDpiDir}`);
+  console.log(`Using system spoofdpi binary for Linux sidecar: ${systemSpoofDpi}`);
+  fs.copyFileSync(systemSpoofDpi, outFile);
+} else {
+  console.error('SpoofDPI source not found at', spoofDpiDir);
+  process.exit(1);
 }
 
 if (!isWindows) {

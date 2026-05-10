@@ -1,6 +1,6 @@
 {
   "bundle": {
     "resources": [],
-    "targets": []
+    "targets": ["deb", "rpm"]
   }
 }

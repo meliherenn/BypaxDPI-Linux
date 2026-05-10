@@ -27,6 +27,7 @@ dist-ssr
 *.vscode
 target
 src-tauri/target
+release-artifacts/
 
 # OS
 Thumbs.db

@@ -1,6 +1,6 @@
 [package]
 name = "bypaxDPI"
-version = "1.0.0"
+version = "0.1.0"
 description = "Unofficial Linux port of BypaxDPI-Windows."
 authors = ["ConsolAktif", "Melih Eren"]
 edition = "2021"
