@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   ChevronLeft, ChevronDown, Globe, Power, Zap, RotateCw, Activity, Pin,
-  Youtube, Coffee, AlertTriangle, Check, Wrench, Languages, Bell, Shield, Settings as SettingsIcon
+  Github, ExternalLink, AlertTriangle, Check, Wrench, Languages, Bell, Shield, Settings as SettingsIcon
 } from 'lucide-react';
 import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart';
 import { Command } from '@tauri-apps/plugin-shell';
@@ -973,27 +973,35 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies,
                 </div>
               </div>
 
-              {/* ========== 8. GELİŞTİRİCİ ========== */}
+              {/* ========== 8. HAKKINDA & KREDİLER ========== */}
               <div className="v2-section">
                 <div className="v2-section-title">{t.sectionDev}</div>
                 <div className="v2-card">
                   <div className="v2-dev-profile">
-                    <img 
-                      src="/consolaktif-logo.jpg" 
-                      alt="ConsolAktif"
+                    <img
+                      src="/bypax-logo.png"
+                      alt="BypaxDPI Linux"
                       className="v2-avatar-img"
                     />
                     <div className="v2-dev-details">
-                      <span className="v2-dev-name">ConsolAktif</span>
+                      <span className="v2-dev-name">BypaxDPI Linux</span>
                       <span className="v2-dev-role">{t.devRole}</span>
                     </div>
                   </div>
+                  <div className="v2-credit-list">
+                    <p>{t.aboutLine1}</p>
+                    <p>{t.aboutLine2}</p>
+                    <p>{t.aboutLine3}</p>
+                    <p className="v2-credit-license-title">{t.aboutLicenses}</p>
+                    <p>{t.aboutLicenseBypax}</p>
+                    <p>{t.aboutLicenseSpoof}</p>
+                  </div>
                   <div className="v2-dev-actions">
-                     <button className="v2-btn youtube" onClick={() => openUrl(URLS.youtube)}>
-                       <Youtube size={18} /> {t.devSubscribe}
+                     <button className="v2-btn github" onClick={() => openUrl(URLS.github)}>
+                       <Github size={18} /> {t.devSubscribe}
                      </button>
-                     <button className="v2-btn coffee" onClick={() => openUrl(URLS.patreon)}>
-                       <Coffee size={18} /> {t.devSupport}
+                     <button className="v2-btn secondary" onClick={() => openUrl(URLS.originalProject)}>
+                       <ExternalLink size={18} /> {t.aboutOriginalProject}
                      </button>
                   </div>
                 </div>

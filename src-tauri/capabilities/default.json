@@ -56,10 +56,8 @@
     {
       "identifier": "opener:allow-open-url",
       "allow": [
-        { "url": "https://www.patreon.com/**" },
         { "url": "https://bypaxdpi.vercel.app/**" },
-        { "url": "https://github.com/ConsolAktif/**" },
-        { "url": "https://youtube.com/**" }
+        { "url": "https://github.com/**" }
       ]
     }
   ]

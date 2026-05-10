@@ -48,10 +48,10 @@ async function main() {
         await rcedit(exePath, {
             icon: iconPath,
             'version-string': {
-                ProductName: 'BypaxDPI',
-                FileDescription: 'BypaxDPI Service',
-                CompanyName: 'ConsolAktif',
-                LegalCopyright: 'Copyright © 2026 ConsolAktif'
+                ProductName: 'BypaxDPI Linux',
+                FileDescription: 'BypaxDPI Linux Proxy Service',
+                CompanyName: 'Melih Eren / ConsolAktif',
+                LegalCopyright: 'Copyright © 2026 BypaxDPI contributors'
             }
         });
         console.log('Icon updated successfully!');

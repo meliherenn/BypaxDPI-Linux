@@ -1,7 +1,7 @@
 const translations = {
   tr: {
     // ===== APP.JSX - Header =====
-    appName: 'BYPAXDPI',
+    appName: 'BypaxDPI Linux',
     statusActive: 'AKTİF',
     statusInactive: 'KAPALI',
     statusReady: 'HAZIR',
@@ -60,7 +60,7 @@ const translations = {
 
     // ===== APP.JSX - Admin Modal =====
     adminTitle: 'Yönetici İzni Gerekli',
-    adminDesc: 'BypaxDPI\'ın düzgün çalışması için yönetici olarak çalıştırılması gereklidir.',
+    adminDesc: 'BypaxDPI Linux\'un düzgün çalışması için yönetici olarak çalıştırılması gereklidir.',
     adminStep: 'Uygulamaya sağ tıklayın → <strong>"Yönetici olarak çalıştır"</strong> seçin',
     adminClose: 'KAPAT',
     adminHowItWorks: 'Nasıl Çalışır?',
@@ -87,7 +87,7 @@ const translations = {
     logMaxRetries: 'Bağlantı kurulamadı. Maksimum deneme sayısına ulaşıldı.',
     logPossibleReasons: 'Olası sebepler:',
     logReasonInternet: 'İnternet bağlantınız kesilmiş olabilir',
-    logReasonFirewall: 'Firewall/Antivirüs BypaxDPI\'ı engelliyor olabilir',
+    logReasonFirewall: 'Firewall/Antivirüs BypaxDPI Linux\'u engelliyor olabilir',
     logReasonPorts: '8080-8084 portları sistem tarafından kullanılıyor',
     logSolutions: 'Çözüm önerileri:',
     logSolInternet: 'İnternet bağlantınızı kontrol edin',
@@ -156,7 +156,7 @@ const translations = {
     // Section: General
     sectionGeneral: 'GENEL',
     autoStart: 'Başlangıçta Çalıştır',
-    autoStartDesc: 'Windows açılınca BypaxDPI\'ı başlat',
+    autoStartDesc: 'Sistem açılınca BypaxDPI Linux\'u başlat',
     minimizeToTray: 'Tepsiye Küçült',
     minimizeToTrayDesc: 'Kapatıldığında arka planda çalışsın',
     alwaysOnTop: 'Her Şeyin Üzerinde Tut',
@@ -262,10 +262,17 @@ const translations = {
     fixErrorDesc: 'İşlem sırasında bir sorun meydana geldi.',
 
     // Section: Developer
-    sectionDev: 'GELİŞTİRİCİ',
-    devRole: 'BypaxDPI Geliştiricisi',
-    devSubscribe: 'Abone Ol',
-    devSupport: 'Destekle',
+    sectionDev: 'HAKKINDA & KREDİLER',
+    devRole: 'Unofficial Linux port maintained by Melih Eren.',
+    devSubscribe: 'GitHub',
+    devSupport: 'Hakkında',
+    aboutLine1: 'Unofficial Linux port maintained by Melih Eren.',
+    aboutLine2: 'Based on BypaxDPI-Windows.',
+    aboutLine3: 'Powered by SpoofDPI.',
+    aboutLicenses: 'Licenses:',
+    aboutLicenseBypax: 'BypaxDPI-Windows: MIT License',
+    aboutLicenseSpoof: 'SpoofDPI: Apache License 2.0',
+    aboutOriginalProject: 'Original project',
 
     // Section: Important Notice
     sectionNotice: 'ÖNEMLİ BİLGİ',
@@ -287,7 +294,7 @@ const translations = {
 
   en: {
     // ===== APP.JSX - Header =====
-    appName: 'BYPAXDPI',
+    appName: 'BypaxDPI Linux',
     statusActive: 'ACTIVE',
     statusInactive: 'OFF',
     statusReady: 'READY',
@@ -346,7 +353,7 @@ const translations = {
 
     // ===== APP.JSX - Admin Modal =====
     adminTitle: 'Administrator Required',
-    adminDesc: 'BypaxDPI needs to run as administrator to work correctly.',
+    adminDesc: 'BypaxDPI Linux needs to run as administrator to work correctly.',
     adminStep: 'Right-click the app → Select <strong>"Run as administrator"</strong>',
     adminClose: 'CLOSE',
     adminHowItWorks: 'How it Works?',
@@ -442,7 +449,7 @@ const translations = {
     // Section: General
     sectionGeneral: 'GENERAL',
     autoStart: 'Start at Boot',
-    autoStartDesc: 'Launch Bypax when Windows starts',
+    autoStartDesc: 'Launch BypaxDPI Linux when the system starts',
     minimizeToTray: 'Minimize to Tray',
     minimizeToTrayDesc: 'Run in background when closed',
     alwaysOnTop: 'Always on Top',
@@ -548,10 +555,17 @@ const translations = {
     fixErrorDesc: 'Something went wrong during the process.',
 
     // Section: Developer
-    sectionDev: 'DEVELOPER',
-    devRole: 'BypaxDPI Developer',
-    devSubscribe: 'Subscribe',
-    devSupport: 'Support',
+    sectionDev: 'ABOUT & CREDITS',
+    devRole: 'Unofficial Linux port maintained by Melih Eren.',
+    devSubscribe: 'GitHub',
+    devSupport: 'About',
+    aboutLine1: 'Unofficial Linux port maintained by Melih Eren.',
+    aboutLine2: 'Based on BypaxDPI-Windows.',
+    aboutLine3: 'Powered by SpoofDPI.',
+    aboutLicenses: 'Licenses:',
+    aboutLicenseBypax: 'BypaxDPI-Windows: MIT License',
+    aboutLicenseSpoof: 'SpoofDPI: Apache License 2.0',
+    aboutOriginalProject: 'Original project',
 
     // Section: Important Notice
     sectionNotice: 'IMPORTANT',

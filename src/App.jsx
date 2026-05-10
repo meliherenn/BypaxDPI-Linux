@@ -26,6 +26,8 @@ import {
   AlertTriangle,
   Check,
   ZoomIn,
+  Github,
+  Info,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -413,19 +415,19 @@ function App() {
                 .find((key) => DNS_MAP[key] === DNS_MAP[selectedDns])
                 ?.toUpperCase()
             : "SYSTEM";
-          tooltip = `🟢 BypaxDPI - ${t.statusConnected}\n127.0.0.1:${currentPortRef.current}\nDNS: ${dnsName}`;
+          tooltip = `🟢 ${APP.name} - ${t.statusConnected}\n127.0.0.1:${currentPortRef.current}\nDNS: ${dnsName}`;
           break;
         case "disconnected":
-          tooltip = `🔴 BypaxDPI - ${t.statusInactive}`;
+          tooltip = `🔴 ${APP.name} - ${t.statusInactive}`;
           break;
         case "retrying":
-          tooltip = `🔄 BypaxDPI - ${t.btnConnecting}\n${retryCount.current}/5...`;
+          tooltip = `🔄 ${APP.name} - ${t.btnConnecting}\n${retryCount.current}/5...`;
           break;
         case "connecting":
-          tooltip = `⏳ BypaxDPI - ${t.btnConnecting}`;
+          tooltip = `⏳ ${APP.name} - ${t.btnConnecting}`;
           break;
         default:
-          tooltip = "🛡️ BypaxDPI";
+          tooltip = `🛡️ ${APP.name}`;
       }
       await invoke("update_tray_tooltip", { tooltip });
     } catch (e) {
@@ -1003,7 +1005,7 @@ function App() {
             addLog(`🔄 ${t.logAutoReconnect}`, "info", {
               i18nKey: "logAutoReconnect",
             });
-            notifyUser("BypaxDPI", t.logAutoReconnect, "disconnect");
+            notifyUser(APP.name, t.logAutoReconnect, "disconnect");
             setIsProcessing(true);
             attemptReconnect();
           }
@@ -1134,7 +1136,7 @@ function App() {
 
       // Eğer kapatma (shutdown) sırasındaysa, bildirim yollama.
       if (!isAppClosingRef.current) {
-        notifyUser("BypaxDPI", t.notifDisconnectManual, "disconnect_manual"); // Özel notification event tipi
+        notifyUser(APP.name, t.notifDisconnectManual, "disconnect_manual"); // Özel notification event tipi
       }
 
       setIsProcessing(false);
@@ -1633,7 +1635,7 @@ function App() {
             >
               <img
                 src="/bypax-logo.png"
-                alt="BypaxDPI"
+                alt={APP.name}
                 style={{
                   width: "70px",
                   height: "70px",
@@ -1644,7 +1646,7 @@ function App() {
                 }}
               />
               <h1 style={{ fontSize: "1.3rem", fontWeight: "600", color: "#fff", marginBottom: "0.5rem" }}>
-                {t.confirmExitTitle || "BypaxDPI Kapatılıyor"}
+                {t.confirmExitTitle || "BypaxDPI Linux Kapatılıyor"}
               </h1>
               <p style={{ color: "#a1a1aa", fontSize: "0.95rem" }}>
                 <AnimatePresence mode="wait">
@@ -1720,7 +1722,7 @@ function App() {
             >
               <img
                 src="/bypax-logo.png"
-                alt="BypaxDPI"
+                alt={APP.name}
                 style={{
                   width: "80px",
                   height: "80px",
@@ -1906,7 +1908,7 @@ function App() {
             }} />
 
             <div style={{ zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", maxWidth: "420px", width: "100%" }}>
-              <img src="/bypax-logo.png" alt="BypaxDPI" style={{ width: "56px", height: "56px", marginBottom: "1rem", borderRadius: "12px", boxShadow: "0 8px 32px rgba(0, 0, 0, 0.3)" }} />
+              <img src="/bypax-logo.png" alt={APP.name} style={{ width: "56px", height: "56px", marginBottom: "1rem", borderRadius: "12px", boxShadow: "0 8px 32px rgba(0, 0, 0, 0.3)" }} />
               <h1 style={{ fontSize: "1.25rem", marginBottom: "0.5rem", color: "#fff", fontWeight: "700" }}>{t.issOverlayTitle}</h1>
               <p style={{ color: "#a1a1aa", marginBottom: "1.25rem", lineHeight: "1.5", fontSize: "0.85rem" }}>{t.issOverlayDesc}</p>
 
@@ -2031,8 +2033,8 @@ function App() {
       {/* Header */}
       <header className="app-header">
         <div className="brand">
-          <img src="/bypax-logo.png" alt="BypaxDPI" className="brand-logo" />
-          <span className="brand-name">BYPAXDPI</span>
+          <img src="/bypax-logo.png" alt={APP.name} className="brand-logo" />
+          <span className="brand-name">{t.appName}</span>
         </div>
         <div
           className={`status-badge ${isConnected ? "active" : isProcessing ? "processing" : "passive"}`}
@@ -2201,7 +2203,7 @@ function App() {
         </button>
       </div>
 
-      {/* Social Links — animasyonlu giriş/çıkış */}
+      {/* Project Links — animasyonlu giriş/çıkış */}
       <AnimatePresence>
         {!isConnected && !isProcessing && (
           <motion.div
@@ -2212,21 +2214,17 @@ function App() {
             transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
           >
             <button
-              className="social-link-btn youtube-btn"
-              onClick={() => openUrl(URLS.youtube)}
+              className="social-link-btn github-btn"
+              onClick={() => openUrl(URLS.github)}
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
-              </svg>
+              <Github size={16} />
               <span>{t.devSubscribe}</span>
             </button>
             <button
-              className="social-link-btn patreon-btn"
-              onClick={() => openUrl(URLS.patreon)}
+              className="social-link-btn about-btn"
+              onClick={() => setShowSettings(true)}
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M15.386.524c-4.764 0-8.64 3.876-8.64 8.64 0 4.75 3.876 8.613 8.64 8.613 4.75 0 8.614-3.864 8.614-8.613C24 4.4 20.136.524 15.386.524zM.003 23.537h4.22V.524H.003v23.013z"/>
-              </svg>
+              <Info size={16} />
               <span>{t.devSupport}</span>
             </button>
           </motion.div>

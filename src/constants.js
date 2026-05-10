@@ -1,12 +1,12 @@
 // ============================================================
-// BypaxDPI — Merkezi Sabitler
+// BypaxDPI Linux — Merkezi Sabitler
 // Tüm URL'ler, DNS ayarları ve app sabitleri burada toplanır.
 // ============================================================
 
 // ===== Dış Bağlantılar =====
 export const URLS = {
-  youtube: "https://youtube.com/@ConsolAktif",
-  patreon: "https://www.patreon.com/join/ConsolAktif",
+  github: "https://github.com/meliherenn/BypaxDPI-Linux",
+  originalProject: "https://github.com/BypaxDPI/BypaxDPI-Windows",
   tutorialHowItWorks: "https://bypaxdpi.vercel.app/how-it-works",
   tutorialProxy: "https://bypaxdpi.vercel.app/proxy",
 };
@@ -36,7 +36,7 @@ export const DOH_MAP = {
 
 // ===== Uygulama Sabitleri =====
 export const APP = {
-  name: "BypaxDPI",
+  name: "BypaxDPI Linux",
   version: "1.0.0",
   designWidth: 380,
   designHeight: 700,

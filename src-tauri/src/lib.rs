@@ -176,7 +176,7 @@ impl Default for PacServerState {
 
 const PAC_PORT_START: u16 = 8787;
 const PAC_PORT_END: u16 = 8887;
-const SUPPORT_URL: &str = "https://www.patreon.com/join/ConsolAktif";
+const PROJECT_URL: &str = "https://github.com/meliherenn/BypaxDPI-Linux";
 
 /// Bağlantı kesildiğinde kullanılan fallback PAC: tüm trafiği DIRECT yönlendirir
 /// Bu sayede cihazlar internet erişimini kaybetmez
@@ -246,7 +246,7 @@ fn make_setup_html(pac_url: &str) -> String {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">
-<title>BypaxDPI – Kurulum</title>
+<title>BypaxDPI Linux – Kurulum</title>
 <style>
 :root {{
     --bg-color: #09090b;
@@ -316,7 +316,7 @@ body {{ background-color: var(--bg-color); color: var(--text-main); line-height:
     </div>
 
     <header class="header">
-        <h1 class="title" data-tr="BypaxDPI'a Bağlan" data-en="Connect to BypaxDPI">BypaxDPI'a Bağlan</h1>
+        <h1 class="title" data-tr="BypaxDPI Linux'a Bağlan" data-en="Connect to BypaxDPI Linux">BypaxDPI Linux'a Bağlan</h1>
         <p class="subtitle" data-tr="İnternet trafiğinizi şifreleyin ve engelleri aşın" data-en="Bypass Internet Restrictions">İnternet Engellerini Aşın</p>
     </header>
 
@@ -1078,8 +1078,7 @@ pub fn run() {
                 use tauri::Manager;
 
                 let show_i = MenuItem::with_id(app, "show", "Uygulamayı Aç", true, None::<&str>)?;
-                let support_i =
-                    MenuItem::with_id(app, "support", "Destekle ❤", true, None::<&str>)?;
+                let support_i = MenuItem::with_id(app, "github", "GitHub", true, None::<&str>)?;
                 let quit_i = MenuItem::with_id(app, "quit", "Çıkış", true, None::<&str>)?;
 
                 use tauri::menu::PredefinedMenuItem;
@@ -1095,7 +1094,7 @@ pub fn run() {
                     .menu(&menu)
                     .show_menu_on_left_click(false) // ✅ Sol tıkta menü açılmasın, sadece sağ tıkta
                     .icon(app.default_window_icon().unwrap().clone())
-                    .tooltip("BypaxDPI - Kapalı")
+                    .tooltip("BypaxDPI Linux - Kapalı")
                     .on_menu_event(|app, event| match event.id.as_ref() {
                         "quit" => {
                             if let Some(window) = app.get_webview_window("main") {
@@ -1116,10 +1115,10 @@ pub fn run() {
                                 let _ = window.set_focus();
                             }
                         }
-                        "support" => {
+                        "github" => {
                             use tauri_plugin_opener::OpenerExt;
                             app.opener()
-                                .open_url(SUPPORT_URL, None::<&str>)
+                                .open_url(PROJECT_URL, None::<&str>)
                                 .unwrap_or(());
                         }
                         _ => {}

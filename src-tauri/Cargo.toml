@@ -1,8 +1,8 @@
 [package]
 name = "bypaxDPI"
 version = "1.0.0"
-description = "Dpi Bypass Tool."
-authors = ["ConsolAktif"]
+description = "Unofficial Linux port of BypaxDPI-Windows."
+authors = ["ConsolAktif", "Melih Eren"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

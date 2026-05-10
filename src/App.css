@@ -211,6 +211,7 @@ body {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  min-width: 0;
 }
 
 .brand-logo {
@@ -224,10 +225,11 @@ body {
   background: linear-gradient(135deg, #ffffff 0%, #d1d5db 100%);
   -webkit-background-clip: text;
   background-clip: text;
-  letter-spacing: 2.5px;
-  font-size: 1.05rem;
+  letter-spacing: 0;
+  font-size: 0.95rem;
   font-weight: 900;
   -webkit-text-fill-color: transparent;
+  white-space: nowrap;
 }
 
 /* Status Badge - Refined */
@@ -240,7 +242,7 @@ body {
   border: 1px solid;
   border-radius: 99px;
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 0;
   font-size: 0.65rem;
   font-weight: 800;
   gap: 0.6rem;
@@ -408,7 +410,7 @@ body {
   -webkit-background-clip: text;
   background-clip: text;
   text-transform: uppercase;
-  letter-spacing: 4.5px;
+  letter-spacing: 0;
   font-size: 1.65rem;
   font-weight: 900;
   -webkit-text-fill-color: transparent;
@@ -426,14 +428,14 @@ body {
   background: linear-gradient(135deg, var(--accent-yellow) 0%, #fbbf24 100%);
   -webkit-background-clip: text;
   background-clip: text;
-  letter-spacing: 2px;
+  letter-spacing: 0;
   font-size: 1.4rem;
   -webkit-text-fill-color: transparent;
 }
 
 .status-desc {
   color: var(--text-secondary);
-  letter-spacing: 0.3px;
+  letter-spacing: 0;
   font-size: 0.88rem;
   font-weight: 500;
 }
@@ -460,7 +462,7 @@ body {
   cursor: pointer;
   transition: all var(--transition-base);
   text-transform: uppercase;
-  letter-spacing: 1.6px;
+  letter-spacing: 0;
   font-size: 0.93rem;
   font-weight: 800;
   gap: 0.7rem;
@@ -534,7 +536,7 @@ body {
   transition: all var(--transition-base);
   font-size: 0.72rem;
   font-weight: 700;
-  letter-spacing: 0.3px;
+  letter-spacing: 0;
   gap: 0.45rem;
 }
 
@@ -543,18 +545,18 @@ body {
   color: #ffffff;
 }
 
-.social-link-btn.youtube-btn:hover {
-  border-color: rgba(220, 38, 38, 0.4);
-  background: rgba(220, 38, 38, 0.12);
-  box-shadow: 0 4px 14px rgba(220, 38, 38, 0.2);
-  color: #f87171;
+.social-link-btn.github-btn:hover {
+  border-color: rgba(96, 165, 250, 0.45);
+  background: rgba(96, 165, 250, 0.12);
+  box-shadow: 0 4px 14px rgba(96, 165, 250, 0.2);
+  color: #93c5fd;
 }
 
-.social-link-btn.patreon-btn:hover {
-  border-color: rgba(249, 115, 22, 0.4);
-  background: rgba(249, 115, 22, 0.12);
-  box-shadow: 0 4px 14px rgba(249, 115, 22, 0.2);
-  color: #fb923c;
+.social-link-btn.about-btn:hover {
+  border-color: rgba(16, 185, 129, 0.42);
+  background: rgba(16, 185, 129, 0.12);
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.18);
+  color: #6ee7b7;
 }
 
 /* ==========================================
@@ -587,7 +589,7 @@ body {
   transition: color var(--transition-fast);
   text-align: center;
   text-transform: uppercase;
-  letter-spacing: 0.9px;
+  letter-spacing: 0;
   font-size: 0.63rem;
   font-weight: 800;
   gap: 0.35rem;
@@ -671,7 +673,7 @@ body {
 
 .logs-title h3 {
   margin: 0;
-  letter-spacing: 1.6px;
+  letter-spacing: 0;
   font-size: 1rem;
   font-weight: 900;
 }
@@ -749,7 +751,7 @@ body {
   border-radius: 12px;
   cursor: pointer;
   transition: all var(--transition-fast);
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
   font-size: 0.83rem;
   font-weight: 800;
   gap: 0.5rem;
@@ -821,7 +823,7 @@ body {
 
 .v2-settings-header h1 {
   margin: 0;
-  letter-spacing: 1.9px;
+  letter-spacing: 0;
   font-size: 1.15rem;
   font-weight: 900;
 }
@@ -863,7 +865,7 @@ body {
 .v2-section-title {
   padding-left: 0.5rem;
   color: var(--text-tertiary);
-  letter-spacing: 1.3px;
+  letter-spacing: 0;
   font-size: 0.72rem;
   font-weight: 800;
 }
@@ -1104,7 +1106,7 @@ body {
   }
 }
 
-/* Developer Section */
+/* About & Credits Section */
 .v2-dev-profile {
   display: flex;
   align-items: center;
@@ -1136,6 +1138,23 @@ body {
   font-size: 0.78rem;
 }
 
+.v2-credit-list {
+  padding: 1rem 1.4rem 0;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.v2-credit-list p {
+  margin: 0 0 0.35rem;
+}
+
+.v2-credit-license-title {
+  color: var(--text-primary);
+  font-weight: 800;
+  margin-top: 0.8rem !important;
+}
+
 .v2-dev-actions {
   display: flex;
   padding: 1rem;
@@ -1162,14 +1181,14 @@ body {
   transform: translateY(-1px);
 }
 
-.v2-btn.youtube {
-  background: #dc2626;
-  box-shadow: 0 3px 10px rgba(220, 38, 38, 0.25);
+.v2-btn.github {
+  background: #2563eb;
+  box-shadow: 0 3px 10px rgba(37, 99, 235, 0.25);
 }
 
-.v2-btn.coffee {
-  background: #f97316;
-  box-shadow: 0 3px 10px rgba(249, 115, 22, 0.25);
+.v2-btn.secondary {
+  background: #334155;
+  box-shadow: 0 3px 10px rgba(51, 65, 85, 0.22);
 }
 
 /* ==========================================
@@ -1345,7 +1364,7 @@ body {
   margin-bottom: 0.5rem;
   color: #71717a;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0;
   font-size: 0.75rem;
   font-weight: 600;
 }
