@@ -1,0 +1,234 @@
+diff --git a/internal/config/cli_test.go b/internal/config/cli_test.go
+index 473094f..5e34501 100644
+--- a/internal/config/cli_test.go
++++ b/internal/config/cli_test.go
+@@ -21,6 +21,13 @@ func TestCreateCommand_Flags(t *testing.T) {
+ 		args   []string
+ 		assert func(t *testing.T, cfg *Config)
+ 	}{
++		{
++			name: "record splitting",
++			args: []string{"spoofdpi", "--clean", "--https-split-mode", "record"},
++			assert: func(t *testing.T, cfg *Config) {
++				assert.Equal(t, HTTPSSplitModeRecord, cfg.Runtime.HTTPS.SplitMode)
++			},
++		},
+ 		{
+ 			name: "default values (no flags)",
+ 			args: []string{"spoofdpi", "--clean"},
+diff --git a/internal/config/parse.go b/internal/config/parse.go
+index 2a4eea6..df8eff3 100644
+--- a/internal/config/parse.go
++++ b/internal/config/parse.go
+@@ -129,6 +129,8 @@ func mustParseHTTPSSplitModeType(s string) HTTPSSplitModeType {
+ 		return HTTPSSplitModeNone
+ 	case "custom":
+ 		return HTTPSSplitModeCustom
++	case "record":
++		return HTTPSSplitModeRecord
+ 	default:
+ 		panic(fmt.Sprintf("cannot parse %q to HTTPSSplitModeType", s))
+ 	}
+diff --git a/internal/config/types.go b/internal/config/types.go
+index d5b09c1..33eeb7a 100644
+--- a/internal/config/types.go
++++ b/internal/config/types.go
+@@ -340,6 +340,7 @@ var availableHTTPSModeValues = []string{
+ 	"first-byte",
+ 	"custom",
+ 	"none",
++	"record",
+ }
+ 
+ const (
+@@ -349,6 +350,7 @@ const (
+ 	HTTPSSplitModeFirstByte
+ 	HTTPSSplitModeCustom
+ 	HTTPSSplitModeNone
++	HTTPSSplitModeRecord
+ )
+ 
+ func (k HTTPSSplitModeType) String() string {
+diff --git a/internal/desync/tls.go b/internal/desync/tls.go
+index e355ea8..adb3136 100644
+--- a/internal/desync/tls.go
++++ b/internal/desync/tls.go
+@@ -3,6 +3,7 @@ package desync
+ import (
+ 	"cmp"
+ 	"context"
++	"encoding/binary"
+ 	"fmt"
+ 	"math/bits"
+ 	"math/rand/v2"
+@@ -145,6 +146,8 @@ func split(
+ 		segments, err = splitFirstByte(raw, opts.Disorder)
+ 	case config.HTTPSSplitModeCustom:
+ 		segments, err = applySegmentPlans(msg, opts.CustomSegmentPlans)
++	case config.HTTPSSplitModeRecord:
++		segments, err = splitTLSRecord(msg)
+ 	case config.HTTPSSplitModeNone:
+ 		segments = []Segment{{Packet: raw}}
+ 	default:
+@@ -435,3 +438,29 @@ func genPatternMask() uint64 {
+ 
+ 	return ret
+ }
++
++// splitTLSRecord preserves the ClientHello handshake bytes, placing a TLS record
++// boundary after the first SNI hostname byte (RFC 8446 section 5.1). TCP packet
++// boundaries alone may be reassembled by a middlebox. No keys or certificates
++// are changed. Missing SNI or an incomplete record falls back via split().
++func splitTLSRecord(msg *proto.TLSMessage) ([]Segment, error) {
++	raw := msg.Raw()
++	if len(raw) < 6 || raw[0] != 0x16 || raw[5] != 0x01 ||
++		int(binary.BigEndian.Uint16(raw[3:5])) != len(raw)-5 {
++		return nil, fmt.Errorf("record split requires one complete ClientHello record")
++	}
++	start, end, err := msg.ExtractSNIOffset()
++	if err != nil {
++		return nil, err
++	}
++	at := start + 1
++	if start < 5 || at >= end || end > len(raw) {
++		return nil, fmt.Errorf("SNI is too short for a record boundary")
++	}
++	first := append([]byte(nil), raw[:at]...)
++	second := append([]byte(nil), raw[:5]...)
++	second = append(second, raw[at:]...)
++	binary.BigEndian.PutUint16(first[3:5], uint16(len(first)-5))
++	binary.BigEndian.PutUint16(second[3:5], uint16(len(second)-5))
++	return []Segment{{Packet: first}, {Packet: second}}, nil
++}
+diff --git a/internal/desync/tls_record_test.go b/internal/desync/tls_record_test.go
+new file mode 100644
+index 0000000..25dbf7c
+--- /dev/null
++++ b/internal/desync/tls_record_test.go
+@@ -0,0 +1,126 @@
++package desync
++
++import (
++	"bytes"
++	"crypto/tls"
++	"encoding/binary"
++	"io"
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"testing"
++	"time"
++
++	"github.com/rs/zerolog"
++	"github.com/xvzc/spoofdpi/internal/config"
++	"github.com/xvzc/spoofdpi/internal/proto"
++)
++
++func TestRecordSplitPreservesHandshake(t *testing.T) {
++	raw := []byte(config.FakeClientHello)
++	// Upstream fake payload deliberately has an inconsistent record length.
++	binary.BigEndian.PutUint16(raw[3:5], uint16(len(raw)-5))
++	before := bytes.Clone(raw)
++	msg := proto.NewFakeTLSMessage(raw)
++	parts, err := splitTLSRecord(msg)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(parts) != 2 {
++		t.Fatalf("got %d records", len(parts))
++	}
++	var payload []byte
++	for _, part := range parts {
++		if !bytes.Equal(part.Packet[:3], raw[:3]) {
++			t.Fatal("record type/version changed")
++		}
++		if int(binary.BigEndian.Uint16(part.Packet[3:5])) != len(part.Packet)-5 {
++			t.Fatal("bad record length")
++		}
++		payload = append(payload, part.Packet[5:]...)
++	}
++	start, _, _ := msg.ExtractSNIOffset()
++	if len(parts[0].Packet) != start+1 {
++		t.Fatal("boundary outside SNI")
++	}
++	if !bytes.Equal(payload, raw[5:]) || !bytes.Equal(raw, before) {
++		t.Fatal("handshake mutated")
++	}
++}
++
++func TestRecordSplitMalformedFallback(t *testing.T) {
++	for _, raw := range [][]byte{nil, {0x16}, {0x16, 3, 1, 0, 1, 1}, []byte("not TLS")} {
++		msg := proto.NewFakeTLSMessage(raw)
++		if _, err := splitTLSRecord(msg); err == nil {
++			t.Fatal("invalid record accepted")
++		}
++		parts := split(zerolog.Nop(), msg, &config.HTTPSOptions{SplitMode: config.HTTPSSplitModeRecord})
++		if len(parts) != 1 || !bytes.Equal(parts[0].Packet, raw) {
++			t.Fatal("unsafe fallback")
++		}
++	}
++}
++
++type recordConn struct {
++	net.Conn
++	first bool
++	split bool
++}
++
++func (c *recordConn) Write(p []byte) (int, error) {
++	if !c.first {
++		return c.Conn.Write(p)
++	}
++	c.first = false
++	msg, err := proto.ReadTLSMessage(bytes.NewReader(p))
++	if err != nil {
++		return 0, err
++	}
++	parts, err := splitTLSRecord(msg)
++	if err != nil {
++		return 0, err
++	}
++	for _, part := range parts {
++		if _, err = c.Conn.Write(part.Packet); err != nil {
++			return 0, err
++		}
++	}
++	if extra := p[msg.Len():]; len(extra) > 0 {
++		if _, err = c.Conn.Write(extra); err != nil {
++			return 0, err
++		}
++	}
++	c.split = true
++	return len(p), nil
++}
++func TestRecordSplitTLSHandshake(t *testing.T) {
++	for _, version := range []uint16{tls.VersionTLS12, tls.VersionTLS13} {
++		t.Run(tls.VersionName(version), func(t *testing.T) {
++			server := httptest.NewUnstartedServer(nil)
++			server.TLS = &tls.Config{MinVersion: version, MaxVersion: version}
++			server.StartTLS()
++			defer server.Close()
++			conn, err := net.DialTimeout("tcp", server.Listener.Addr().String(), time.Second)
++			if err != nil {
++				t.Fatal(err)
++			}
++			wrapped := &recordConn{Conn: conn, first: true}
++			defer wrapped.Close()
++			_ = wrapped.SetDeadline(time.Now().Add(3 * time.Second))
++			roots := server.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
++			client := tls.Client(wrapped, &tls.Config{ServerName: "example.com", RootCAs: roots, MinVersion: version, MaxVersion: version})
++			if err = client.Handshake(); err != nil {
++				t.Fatal(err)
++			}
++			if !wrapped.split {
++				t.Fatal("record splitter not exercised")
++			}
++			if _, err = io.WriteString(client, "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n"); err != nil {
++				t.Fatal(err)
++			}
++			if _, err = io.ReadAll(client); err != nil {
++				t.Fatal(err)
++			}
++		})
++	}
++}

@@ -1,242 +1,333 @@
-use super::ProxySetupResult;
-use std::process::{Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use super::{linux_state, ProxySetupResult};
+use std::process::Command;
 
 const PROXY_HOST: &str = "127.0.0.1";
+const BACKUP: &str = "proxy-backup.json";
+// Mode is written last: every endpoint must be ready before enabling the proxy.
+const KEYS: &[(&str, &str)] = &[
+    ("org.gnome.system.proxy.http", "host"),
+    ("org.gnome.system.proxy.http", "port"),
+    ("org.gnome.system.proxy.https", "host"),
+    ("org.gnome.system.proxy.https", "port"),
+    ("org.gnome.system.proxy.http", "use-authentication"),
+    ("org.gnome.system.proxy", "use-same-proxy"),
+    ("org.gnome.system.proxy", "mode"),
+];
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-struct GSettingsProxyBackup {
-    mode: Option<String>,
-    http_host: Option<String>,
-    http_port: Option<String>,
-    https_host: Option<String>,
-    https_port: Option<String>,
+trait Settings {
+    fn get(&self, schema: &str, key: &str) -> Result<String, String>;
+    fn set(&self, schema: &str, key: &str, value: &str) -> Result<(), String>;
 }
-
-fn backup_store() -> &'static Mutex<Option<GSettingsProxyBackup>> {
-    static STORE: OnceLock<Mutex<Option<GSettingsProxyBackup>>> = OnceLock::new();
-    STORE.get_or_init(|| Mutex::new(None))
-}
-
-fn backup_path() -> std::path::PathBuf {
-    std::env::temp_dir().join("bypaxdpi_linux_proxy_backup.json")
-}
-
-fn gsettings_get(schema: &str, key: &str) -> Option<String> {
-    let output = Command::new("gsettings")
-        .args(["get", schema, key])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+struct GSettings;
+impl Settings for GSettings {
+    fn get(&self, schema: &str, key: &str) -> Result<String, String> {
+        let output = Command::new("gsettings")
+            .args(["get", schema, key])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().into());
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().into())
     }
-    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-fn gsettings_writable(schema: &str, key: &str) -> bool {
-    let output = Command::new("gsettings")
-        .args(["writable", schema, key])
-        .output();
-    let Ok(output) = output else {
-        return false;
-    };
-    output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "true"
-}
-
-fn gsettings_set(schema: &str, key: &str, value: &str) -> bool {
-    if !gsettings_writable(schema, key) {
-        return false;
-    }
-    Command::new("gsettings")
-        .args(["set", schema, key, value])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-}
-
-fn gsettings_set_optional(schema: &str, key: &str, value: &str) -> bool {
-    if !gsettings_writable(schema, key) {
-        return true;
-    }
-    gsettings_set(schema, key, value)
-}
-
-fn gsettings_available() -> bool {
-    gsettings_writable("org.gnome.system.proxy", "mode")
-}
-
-fn read_backup_from_disk() -> Option<GSettingsProxyBackup> {
-    let contents = std::fs::read_to_string(backup_path()).ok()?;
-    serde_json::from_str(&contents).ok()
-}
-
-fn write_backup_to_disk(settings: &GSettingsProxyBackup) {
-    if let Ok(contents) = serde_json::to_string(settings) {
-        let _ = std::fs::write(backup_path(), contents);
+    fn set(&self, schema: &str, key: &str, value: &str) -> Result<(), String> {
+        let output = Command::new("gsettings")
+            .args(["set", schema, key, value])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().into());
+        }
+        if self.get(schema, key)? != value {
+            return Err(format!("Proxy setting did not persist: {schema} {key}"));
+        }
+        Ok(())
     }
 }
 
-fn backup_proxy_settings() {
-    let settings = GSettingsProxyBackup {
-        mode: gsettings_get("org.gnome.system.proxy", "mode"),
-        http_host: gsettings_get("org.gnome.system.proxy.http", "host"),
-        http_port: gsettings_get("org.gnome.system.proxy.http", "port"),
-        https_host: gsettings_get("org.gnome.system.proxy.https", "host"),
-        https_port: gsettings_get("org.gnome.system.proxy.https", "port"),
-    };
-
-    if let Ok(mut guard) = backup_store().lock() {
-        if guard.is_none() {
-            *guard = Some(settings.clone());
-            write_backup_to_disk(&settings);
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct Backup {
+    original: Vec<String>,
+    applied: Vec<String>,
+}
+trait Recovery {
+    fn read(&self) -> Result<Option<Backup>, String>;
+    fn save(&self, backup: &Backup) -> Result<(), String>;
+    fn remove(&self) -> Result<(), String>;
+}
+struct Disk;
+impl Recovery for Disk {
+    fn read(&self) -> Result<Option<Backup>, String> {
+        match std::fs::read(linux_state::state_dir()?.join(BACKUP)) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(|e| format!("Cannot read proxy recovery data: {e}")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.to_string()),
         }
     }
-}
-
-fn restore_raw(schema: &str, key: &str, value: &Option<String>) {
-    if let Some(value) = value {
-        let _ = gsettings_set(schema, key, value);
+    fn save(&self, backup: &Backup) -> Result<(), String> {
+        linux_state::write_json(BACKUP, backup)
+    }
+    fn remove(&self) -> Result<(), String> {
+        std::fs::remove_file(linux_state::state_dir()?.join(BACKUP)).map_err(|e| e.to_string())
     }
 }
 
-fn restore_proxy_settings() -> bool {
-    let settings = match backup_store().lock() {
-        Ok(guard) => guard.clone(),
-        Err(poisoned) => poisoned.into_inner().clone(),
-    }
-    .or_else(read_backup_from_disk);
-
-    let Some(settings) = settings else {
-        return false;
+fn restore(settings: &impl Settings, recovery: &impl Recovery) -> Result<bool, String> {
+    let Some(backup) = recovery.read()? else {
+        return Ok(false);
     };
-
-    restore_raw("org.gnome.system.proxy.http", "host", &settings.http_host);
-    restore_raw("org.gnome.system.proxy.http", "port", &settings.http_port);
-    restore_raw("org.gnome.system.proxy.https", "host", &settings.https_host);
-    restore_raw("org.gnome.system.proxy.https", "port", &settings.https_port);
-    restore_raw("org.gnome.system.proxy", "mode", &settings.mode);
-
-    if let Ok(mut guard) = backup_store().lock() {
-        *guard = None;
+    if backup.original.len() != KEYS.len() || backup.applied.len() != KEYS.len() {
+        return Err("Invalid proxy recovery data; backup retained".into());
     }
-    let _ = std::fs::remove_file(backup_path());
-    true
+    let mut errors = Vec::new();
+    for (i, (schema, key)) in KEYS.iter().enumerate() {
+        match settings.get(schema, key) {
+            // Preserve settings changed by the user or another application during this session.
+            Ok(current) if current == backup.applied[i] && current != backup.original[i] => {
+                if let Err(err) = settings.set(schema, key, &backup.original[i]) {
+                    errors.push(err);
+                }
+            }
+            Ok(_) => (),
+            Err(err) => errors.push(err),
+        }
+    }
+    if !errors.is_empty() {
+        return Err(format!(
+            "Proxy restore incomplete; recovery backup retained: {}",
+            errors.join("; ")
+        ));
+    }
+    recovery.remove()?;
+    Ok(true)
+}
+
+fn apply(settings: &impl Settings, recovery: &impl Recovery, port: u16) -> Result<(), String> {
+    restore(settings, recovery)?;
+    let original = KEYS
+        .iter()
+        .map(|(s, k)| settings.get(s, k))
+        .collect::<Result<Vec<_>, _>>()?;
+    let applied = vec![
+        "'127.0.0.1'".into(),
+        port.to_string(),
+        "'127.0.0.1'".into(),
+        port.to_string(),
+        "false".into(),
+        "false".into(),
+        "'manual'".into(),
+    ];
+    let backup = Backup { original, applied };
+    // Persist the complete recovery journal BEFORE touching desktop settings.
+    recovery.save(&backup)?;
+    for (i, (schema, key)) in KEYS.iter().enumerate() {
+        if let Err(err) = settings.set(schema, key, &backup.applied[i]) {
+            return match restore(settings, recovery) {
+                Ok(_) => Err(format!("Proxy setup failed and was rolled back: {err}")),
+                Err(restore_err) => Err(format!("{err}; {restore_err}")),
+            };
+        }
+    }
+    Ok(())
+}
+
+fn supported_desktop(desktop: &str) -> bool {
+    desktop.split(':').any(|part| {
+        matches!(
+            part.to_ascii_lowercase().as_str(),
+            "gnome" | "unity" | "cinnamon" | "x-cinnamon"
+        )
+    })
 }
 
 pub fn name() -> &'static str {
     "linux"
 }
-
-pub fn should_bind_lan_for_game_mode(_enable_game_mode: bool) -> bool {
+pub fn should_bind_lan_for_game_mode(_enable: bool) -> bool {
     false
 }
 
 pub fn set_system_proxy(port: u16, _enable_winhttp: bool) -> Result<ProxySetupResult, String> {
-    if !gsettings_available() {
-        return Ok(manual_fallback(port, "gsettings is unavailable"));
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    if !supported_desktop(&desktop) {
+        return Ok(manual_fallback(
+            port,
+            &format!(
+                "desktop '{}' requires per-application proxy configuration",
+                desktop
+            ),
+        ));
     }
-
-    backup_proxy_settings();
-
-    let port_value = port.to_string();
-    let required_ok = gsettings_set("org.gnome.system.proxy.http", "host", "'127.0.0.1'")
-        && gsettings_set("org.gnome.system.proxy.http", "port", &port_value)
-        && gsettings_set("org.gnome.system.proxy", "mode", "'manual'");
-
-    let optional_ok = gsettings_set_optional("org.gnome.system.proxy.https", "host", "'127.0.0.1'")
-        && gsettings_set_optional("org.gnome.system.proxy.https", "port", &port_value);
-
-    if required_ok && optional_ok {
-        Ok(ProxySetupResult {
+    match apply(&GSettings, &Disk, port) {
+        Ok(()) => Ok(ProxySetupResult {
             platform: name(),
-            host: PROXY_HOST.to_string(),
+            host: PROXY_HOST.into(),
             port,
             automatic: true,
-            message: format!("Linux GNOME proxy applied at {}:{}", PROXY_HOST, port),
-        })
-    } else {
-        let _ = restore_proxy_settings();
-        Ok(manual_fallback(port, "gsettings proxy setup failed"))
+            message: format!("Desktop HTTP/HTTPS proxy applied at {PROXY_HOST}:{port}"),
+        }),
+        Err(err) => {
+            // An unsuccessful rollback is actionable: do not hide it behind manual fallback.
+            if Disk.read()?.is_some() {
+                return Err(err);
+            }
+            Ok(manual_fallback(port, &err))
+        }
     }
 }
 
 pub fn clear_system_proxy() -> Result<(), String> {
-    if !gsettings_available() {
-        return Ok(());
-    }
-
-    if !restore_proxy_settings() {
-        let _ = gsettings_set("org.gnome.system.proxy", "mode", "'none'");
-    }
-
-    Ok(())
+    restore(&GSettings, &Disk).map(|_| ())
+}
+pub fn startup_cleanup() -> Result<bool, String> {
+    restore(&GSettings, &Disk)
 }
 
 fn manual_fallback(port: u16, reason: &str) -> ProxySetupResult {
     ProxySetupResult {
         platform: name(),
-        host: PROXY_HOST.to_string(),
+        host: PROXY_HOST.into(),
         port,
         automatic: false,
-        message: format!(
-            "Manual proxy fallback ({}): set HTTP/HTTPS proxy to {}:{}",
-            reason, PROXY_HOST, port
-        ),
+        message: format!("Manual proxy ({reason}): set HTTP/HTTPS proxy to {PROXY_HOST}:{port}"),
     }
 }
-
 pub fn manage_firewall_rules(_enable: bool, _proxy_port: u16, _pac_port: u16) {}
-
 pub fn check_admin() -> bool {
     true
 }
-
 pub fn check_driver() -> bool {
     false
 }
-
 pub fn install_driver(_app: tauri::AppHandle) -> Result<(), String> {
-    Err("Npcap driver installation is only supported on Windows.".to_string())
+    Err("Npcap driver installation is only supported on Windows.".into())
 }
-
 pub fn kill_zombie_sidecar() -> Result<String, String> {
-    let pid_file = std::env::temp_dir().join("bypaxdpi_sidecar.pid");
-    let Ok(pid_str) = std::fs::read_to_string(&pid_file) else {
-        return Ok("Zombie PID file was not found.".to_string());
-    };
-
-    let pid = pid_str
-        .trim()
-        .parse::<u32>()
-        .map_err(|e| format!("Invalid zombie PID file: {}", e))?;
-    if pid == 0 {
-        let _ = std::fs::remove_file(&pid_file);
-        return Ok("Zombie PID file was empty.".to_string());
-    }
-
-    let status = Command::new("kill")
-        .args(["-TERM", &pid.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-
-    let _ = std::fs::remove_file(&pid_file);
-
-    match status {
-        Ok(status) if status.success() => {
-            Ok(format!("Zombie sidecar process (PID {}) stopped.", pid))
-        }
-        Ok(_) => Ok(format!(
-            "Zombie sidecar process (PID {}) was not running.",
-            pid
-        )),
-        Err(e) => Err(format!("Failed to stop zombie sidecar PID {}: {}", pid, e)),
+    linux_state::stop_orphan()
+}
+pub fn cleanup_on_panic() {
+    if linux_state::owns_instance() {
+        let _ = clear_system_proxy();
+        let _ = kill_zombie_sidecar();
     }
 }
 
-pub fn cleanup_on_panic() {
-    let _ = clear_system_proxy();
-    let _ = kill_zombie_sidecar();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    struct FakeSettings {
+        values: RefCell<Vec<String>>,
+        fail: RefCell<Option<usize>>,
+    }
+    impl FakeSettings {
+        fn new() -> Self {
+            Self {
+                values: RefCell::new(vec![
+                    "'original'".into(),
+                    "3128".into(),
+                    "'secure'".into(),
+                    "3129".into(),
+                    "true".into(),
+                    "true".into(),
+                    "'auto'".into(),
+                ]),
+                fail: RefCell::new(None),
+            }
+        }
+        fn index(s: &str, k: &str) -> usize {
+            KEYS.iter()
+                .position(|&(schema, key)| schema == s && key == k)
+                .unwrap()
+        }
+    }
+    impl Settings for FakeSettings {
+        fn get(&self, s: &str, k: &str) -> Result<String, String> {
+            Ok(self.values.borrow()[Self::index(s, k)].clone())
+        }
+        fn set(&self, s: &str, k: &str, v: &str) -> Result<(), String> {
+            let i = Self::index(s, k);
+            if *self.fail.borrow() == Some(i) {
+                return Err("locked setting".into());
+            }
+            self.values.borrow_mut()[i] = v.into();
+            Ok(())
+        }
+    }
+    #[derive(Default)]
+    struct Memory(RefCell<Option<Backup>>);
+    impl Recovery for Memory {
+        fn read(&self) -> Result<Option<Backup>, String> {
+            Ok(self.0.borrow().clone())
+        }
+        fn save(&self, b: &Backup) -> Result<(), String> {
+            *self.0.borrow_mut() = Some(b.clone());
+            Ok(())
+        }
+        fn remove(&self) -> Result<(), String> {
+            *self.0.borrow_mut() = None;
+            Ok(())
+        }
+    }
+    #[test]
+    fn no_backup_does_not_change_an_existing_proxy() {
+        let settings = FakeSettings::new();
+        let before = settings.values.borrow().clone();
+        assert!(!restore(&settings, &Memory::default()).unwrap());
+        assert_eq!(*settings.values.borrow(), before);
+    }
+    #[test]
+    fn complete_round_trip_and_repeated_cleanup() {
+        let settings = FakeSettings::new();
+        let before = settings.values.borrow().clone();
+        let recovery = Memory::default();
+        apply(&settings, &recovery, 8080).unwrap();
+        assert_eq!(settings.values.borrow()[6], "'manual'");
+        assert!(restore(&settings, &recovery).unwrap());
+        assert!(!restore(&settings, &recovery).unwrap());
+        assert_eq!(*settings.values.borrow(), before);
+    }
+    #[test]
+    fn partial_setup_rolls_back() {
+        let settings = FakeSettings::new();
+        let before = settings.values.borrow().clone();
+        let recovery = Memory::default();
+        *settings.fail.borrow_mut() = Some(3);
+        assert!(apply(&settings, &recovery, 8080).is_err());
+        assert_eq!(*settings.values.borrow(), before);
+        assert!(recovery.read().unwrap().is_none());
+    }
+    #[test]
+    fn failed_restore_retains_backup_for_retry() {
+        let settings = FakeSettings::new();
+        let before = settings.values.borrow().clone();
+        let recovery = Memory::default();
+        apply(&settings, &recovery, 8080).unwrap();
+        *settings.fail.borrow_mut() = Some(0);
+        assert!(restore(&settings, &recovery).is_err());
+        assert!(recovery.read().unwrap().is_some());
+        *settings.fail.borrow_mut() = None;
+        restore(&settings, &recovery).unwrap();
+        assert_eq!(*settings.values.borrow(), before);
+    }
+    #[test]
+    fn external_changes_are_preserved() {
+        let settings = FakeSettings::new();
+        let recovery = Memory::default();
+        apply(&settings, &recovery, 8080).unwrap();
+        settings.values.borrow_mut()[0] = "'user-new-proxy'".into();
+        settings.values.borrow_mut()[6] = "'none'".into();
+        restore(&settings, &recovery).unwrap();
+        assert_eq!(settings.values.borrow()[0], "'user-new-proxy'");
+        assert_eq!(settings.values.borrow()[6], "'none'");
+    }
+    #[test]
+    fn kde_is_not_reported_as_gnome() {
+        assert!(!supported_desktop("KDE"));
+        assert!(!supported_desktop(""));
+        assert!(supported_desktop("ubuntu:GNOME"));
+        assert!(supported_desktop("X-Cinnamon"));
+    }
 }

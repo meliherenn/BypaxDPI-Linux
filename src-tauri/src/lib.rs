@@ -11,6 +11,7 @@ use std::time::Duration;
 use tauri::Emitter;
 use tauri::Manager;
 
+mod diagnostics;
 mod platform;
 
 // ═══════════════════════════════════════════════════════════════════
@@ -20,6 +21,7 @@ mod platform;
 
 /// Sentinel dosya yolu — proxy aktifken var, kapanınca silinir.
 /// Crash/BSOD/force-kill sonrası hâlâ duruyorsa → dirty shutdown algılanır.
+#[cfg(not(target_os = "linux"))]
 fn sentinel_path() -> std::path::PathBuf {
     std::env::temp_dir().join("bypaxdpi_proxy_active.lock")
 }
@@ -811,6 +813,7 @@ fn clear_system_proxy() -> Result<(), String> {
     platform::clear_system_proxy()?;
 
     // P0-FIX-1: Sentinel dosyasını sil — proxy artık aktif değil
+    #[cfg(not(target_os = "linux"))]
     let _ = std::fs::remove_file(sentinel_path());
 
     Ok(())
@@ -827,6 +830,7 @@ fn set_system_proxy(port: u16, enable_winhttp: bool) -> Result<platform::ProxySe
     let setup = platform::set_system_proxy(port, enable_winhttp)?;
 
     // P0-FIX-1: Sentinel dosyası oluştur — proxy artık aktif
+    #[cfg(not(target_os = "linux"))]
     if setup.automatic {
         let _ = std::fs::write(
             sentinel_path(),
@@ -836,6 +840,7 @@ fn set_system_proxy(port: u16, enable_winhttp: bool) -> Result<platform::ProxySe
             ),
         );
     } else {
+        #[cfg(not(target_os = "linux"))]
         let _ = std::fs::remove_file(sentinel_path());
     }
 
@@ -855,7 +860,13 @@ fn update_tray_tooltip(app: tauri::AppHandle, tooltip: String) -> Result<(), Str
 
 /// P1-FIX: Port aralığı kısıtlama — XSS ile localhost port taraması engellenir
 #[tauri::command]
-fn check_port_open(port: u16) -> bool {
+async fn check_port_open(port: u16) -> bool {
+    tauri::async_runtime::spawn_blocking(move || port_open(port))
+        .await
+        .unwrap_or(false)
+}
+
+fn port_open(port: u16) -> bool {
     // Sadece privileged portları engelle, dinamik portlara (OS ataması) izin ver
     if port < 1024 {
         return false;
@@ -877,7 +888,13 @@ struct ProxyHealthResponse {
 
 /// Linux MVP health check: prove the local proxy on 127.0.0.1 accepts CONNECT.
 #[tauri::command]
-fn check_proxy_health(port: u16) -> Result<ProxyHealthResponse, String> {
+async fn check_proxy_health(port: u16) -> Result<ProxyHealthResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || proxy_health(port))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn proxy_health(port: u16) -> Result<ProxyHealthResponse, String> {
     if port < 1024 {
         return Err("Geçersiz port numarası (1024-65535 arası olmalı)".to_string());
     }
@@ -906,17 +923,15 @@ fn check_proxy_health(port: u16) -> Result<ProxyHealthResponse, String> {
         });
     }
 
-    let mut buf = [0_u8; 512];
-    match stream.read(&mut buf) {
-        Ok(0) => Ok(ProxyHealthResponse {
-            port_open: true,
-            proxy_ok: false,
-            status_line: "proxy closed health-check connection without a response".to_string(),
-        }),
-        Ok(n) => {
-            let response = String::from_utf8_lossy(&buf[..n]);
-            let status_line = response.lines().next().unwrap_or("").trim().to_string();
-            let proxy_ok = status_line.starts_with("HTTP/") && status_line.contains(" 200 ");
+    use std::io::BufRead;
+    let mut status_line = String::new();
+    let result = std::io::BufReader::new(stream.take(512)).read_line(&mut status_line);
+    match result {
+        Ok(_) => {
+            let status_line = status_line.trim().to_string();
+            let parts: Vec<_> = status_line.split_whitespace().collect();
+            let proxy_ok = matches!(parts.first(), Some(&"HTTP/1.0") | Some(&"HTTP/1.1"))
+                && parts.get(1) == Some(&"200");
             Ok(ProxyHealthResponse {
                 port_open: true,
                 proxy_ok,
@@ -926,7 +941,7 @@ fn check_proxy_health(port: u16) -> Result<ProxyHealthResponse, String> {
         Err(err) => Ok(ProxyHealthResponse {
             port_open: true,
             proxy_ok: false,
-            status_line: format!("proxy CONNECT read failed: {}", err),
+            status_line: format!("proxy CONNECT read failed: {err}"),
         }),
     }
 }
@@ -949,9 +964,16 @@ fn perform_app_exit(app: &tauri::AppHandle) {
 
 /// Uygulama açıldığında eski bypax-proxy süreçlerini temizle (Zombi süreç önleme)
 #[tauri::command]
-fn save_sidecar_pid(pid: u32) {
-    let pid_file = std::env::temp_dir().join("bypaxdpi_sidecar.pid");
-    let _ = std::fs::write(&pid_file, pid.to_string());
+fn save_sidecar_pid(pid: u32) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        platform::linux_state::save_pid(pid)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let pid_file = std::env::temp_dir().join("bypaxdpi_sidecar.pid");
+        std::fs::write(&pid_file, pid.to_string()).map_err(|e| e.to_string())
+    }
 }
 
 /// Uygulama açıldığında eski bypax-proxy süreçlerini temizle (Zombi süreç önleme)
@@ -976,40 +998,52 @@ async fn check_dns_latency(dns_ip: String) -> Result<u32, String> {
         return Err("Bilinmeyen DNS adresi".to_string());
     }
 
-    let start = std::time::Instant::now();
-    let addr = format!("{}:53", dns_ip)
-        .parse()
-        .map_err(|e: std::net::AddrParseError| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let start = std::time::Instant::now();
+        let addr = format!("{}:53", dns_ip)
+            .parse()
+            .map_err(|e: std::net::AddrParseError| e.to_string())?;
 
-    match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(1500)) {
-        Ok(_) => Ok(start.elapsed().as_millis() as u32),
-        Err(_) => Ok(999),
-    }
+        match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(1500)) {
+            Ok(_) => Ok(start.elapsed().as_millis() as u32),
+            Err(_) => Ok(999),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// P0-FIX-1: Uygulama başlangıcında crash/BSOD sonrası kalan kirli proxy'yi temizle
 /// Sentinel dosyası varsa = önceki oturum düzgün kapanmamış demektir
 #[tauri::command]
 fn startup_proxy_cleanup() -> Result<bool, String> {
-    let sentinel = sentinel_path();
-
-    if sentinel.exists() {
-        eprintln!("[STARTUP] ⚠️ Dirty shutdown detected — sentinel file found");
-        eprintln!("[STARTUP] Cleaning orphaned proxy settings...");
-
-        platform::clear_system_proxy()?;
-
-        let _ = std::fs::remove_file(&sentinel);
-        eprintln!("[STARTUP] ✅ Orphaned proxy state cleaned");
-
-        return Ok(true);
+    let _guard = acquire_proxy_lock();
+    #[cfg(target_os = "linux")]
+    {
+        platform::startup_cleanup()
     }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let sentinel = sentinel_path();
 
-    // ✅ FIX: Temiz başlangıçta firewall temizleme YAPMA
-    // Eski kod: manage_firewall_rules(false, 0, 0) — autoConnect ile race condition yaratıyordu
-    // Sentinel yoksa zaten önceki oturum düzgün kapanmış, firewall kuralları da temizlenmiş demektir
+        if sentinel.exists() {
+            eprintln!("[STARTUP] ⚠️ Dirty shutdown detected — sentinel file found");
+            eprintln!("[STARTUP] Cleaning orphaned proxy settings...");
 
-    Ok(false) // Temiz başlangıç
+            platform::clear_system_proxy()?;
+
+            let _ = std::fs::remove_file(&sentinel);
+            eprintln!("[STARTUP] ✅ Orphaned proxy state cleaned");
+
+            return Ok(true);
+        }
+
+        // ✅ FIX: Temiz başlangıçta firewall temizleme YAPMA
+        // Eski kod: manage_firewall_rules(false, 0, 0) — autoConnect ile race condition yaratıyordu
+        // Sentinel yoksa zaten önceki oturum düzgün kapanmış, firewall kuralları da temizlenmiş demektir
+
+        Ok(false) // Temiz başlangıç
+    }
 }
 
 // 1. Sürücü kontrolü (lib.rs içine ekle)
@@ -1031,6 +1065,14 @@ fn quit_app(app: tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    let _instance_lock = match platform::linux_state::lock_instance() {
+        Ok(lock) => lock,
+        Err(err) => {
+            eprintln!("{err}");
+            return;
+        }
+    };
     // P0-FIX: Single-instance enforcement — aynı anda sadece bir BypaxDPI çalışabilir
     #[cfg(target_os = "windows")]
     {
@@ -1174,6 +1216,8 @@ pub fn run() {
                     window.on_window_event(move |event| {
                         if let tauri::WindowEvent::Destroyed = event {
                             let _ = clear_system_proxy();
+                            #[cfg(target_os = "linux")]
+                            let _ = platform::kill_zombie_sidecar();
                             // ✅ P2-FIX: PAC'i de DIRECT'e geçir
                             if let Some(pac_state) = app_handle.try_state::<PacServerState>() {
                                 if let Ok(mut body) = pac_state.pac_body.lock() {
@@ -1203,6 +1247,7 @@ pub fn run() {
             check_admin,
             check_port_open,
             check_proxy_health,
+            diagnostics::diagnose_connection,
             get_sidecar_config,
             start_pac_server,
             stop_pac_server,
@@ -1221,6 +1266,8 @@ pub fn run() {
             // LAYER 3: App exit cleanup (fallback)
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 let _ = clear_system_proxy();
+                #[cfg(target_os = "linux")]
+                let _ = platform::kill_zombie_sidecar();
                 if let Some(state) = app_handle.try_state::<PacServerState>() {
                     // Grace period'u kısalt — App.jsx zaten 1.5s (şimdi 0.5s) bekledi
                     // DIRECT'e geç ama uzun bekleme
@@ -1245,5 +1292,6 @@ pub fn run() {
 
 pub fn cleanup_on_panic() {
     platform::cleanup_on_panic();
+    #[cfg(not(target_os = "linux"))]
     let _ = std::fs::remove_file(sentinel_path());
 }

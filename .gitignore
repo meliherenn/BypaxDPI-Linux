@@ -48,3 +48,8 @@ src-tauri/binaries/bypax-proxy*
 *.dylib
 
 SpoofDPI-1.2.1/
+
+src-tauri/binaries/engine-manifest.json
+
+output/
+.playwright/

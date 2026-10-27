@@ -1,4 +1,6 @@
 import Settings from "./Settings";
+import ConnectionDiagnostics from "./ConnectionDiagnostics";
+import { buildEngineArgs } from "./engineArgs";
 import { motion, AnimatePresence } from "framer-motion";
 // autostart importları Settings.jsx'te kullanılıyor, burada gerek yok
 import { useState, useRef, useEffect, useMemo } from "react";
@@ -56,7 +58,12 @@ function App() {
   const [connectionModalTab, setConnectionModalTab] = useState("pac"); // pac | manual
   const [copiedField, setCopiedField] = useState(null);
   const [showLargeQr, setShowLargeQr] = useState(false);
-  const [platform, setPlatform] = useState("windows");
+  const [platform, setPlatform] = useState("unknown");
+  const [proxyAutomatic, setProxyAutomatic] = useState(false);
+  const [startupReady, setStartupReady] = useState(false);
+  const startupTask = useRef(null);
+  const engineSession = useRef(0);
+  const cleanupTask = useRef(Promise.resolve());
   const isWindows = platform === "windows";
   const isLinux = platform === "linux";
   const manualProxyHost = isLinux ? "127.0.0.1" : lanIp;
@@ -170,6 +177,7 @@ function App() {
       selectedDns: "cloudflare",
       autoReconnect: true,
       dpiMethod: "2",
+      linuxTlsRecordSplit: true,
       httpsChunkSize: 1,
       ipv4Only: true,
       selectedIspProfile: "heavy",
@@ -191,6 +199,7 @@ function App() {
         return { 
           ...defaultSettings, 
           ...parsed,
+          linuxTlsRecordSplit: parsed.linuxTlsRecordSplit !== false,
           dpiMethod: ['0', '1', '2'].includes(String(parsed.dpiMethod)) ? String(parsed.dpiMethod) : defaultSettings.dpiMethod,
           httpsChunkSize: [1, 2, 4, 8, 16, 32, 64, 128].includes(Number(parsed.httpsChunkSize)) ? Number(parsed.httpsChunkSize) : defaultSettings.httpsChunkSize,
           selectedDns: typeof parsed.selectedDns === 'string' ? parsed.selectedDns : defaultSettings.selectedDns,
@@ -209,6 +218,7 @@ function App() {
     [config.language],
   );
 
+  const localProxyInstructions = isLinux && !config.lanSharing;
   const childProcess = useRef(null);
   const isStartingEngine = useRef(false);
   const logsEndRef = useRef(null);
@@ -224,6 +234,7 @@ function App() {
   const trayQuitRef = useRef(false);
   const prevLanSharingRef = useRef(config.lanSharing ?? false);
   const prevDpiMethodRef = useRef(config.dpiMethod);
+  const prevRecordSplitRef = useRef(config.linuxTlsRecordSplit);
   const prevChunkSizeRef = useRef(config.httpsChunkSize ?? 4);
   const prevSelectedDnsRef = useRef(config.selectedDns);
   const prevDnsModeRef = useRef(config.dnsMode);
@@ -395,7 +406,9 @@ function App() {
         i18nParams: [e],
       });
       console.error(e);
+      return false;
     }
+    return true;
   };
 
   // ✅ Exponential backoff hesaplama — ilk retry'da da 2.5s bekle (TIME_WAIT)
@@ -491,7 +504,9 @@ function App() {
         },
       );
       updateTrayTooltip("retrying");
+      const retrySession = engineSession.current;
       retryTimer.current = setTimeout(() => {
+        if (retrySession !== engineSession.current || isAppClosingRef.current) return;
         addLog(`🔄 ${t.logReconnectNow}`, "info", {
           i18nKey: "logReconnectNow",
         });
@@ -516,8 +531,19 @@ function App() {
 
   const startEngine = async (ignoredPort, portRetryCount = 0) => {
     // P2-FIX: Asynchronous execution lock -> Aynı anda iki instance spawn edilmesini önler
-    if (isStartingEngine.current || childProcess.current) return;
+    if (isStartingEngine.current || childProcess.current || isAppClosingRef.current) return;
     isStartingEngine.current = true;
+    const session = ++engineSession.current;
+    let closed = false;
+    const isCurrent = () => session === engineSession.current && !closed && !isAppClosingRef.current;
+    // Resolve here too: auto-connect must never use a stale Windows-default closure.
+    let platform;
+    try { platform = await invoke("get_platform"); }
+    catch (err) { addLog(String(err), "error"); isStartingEngine.current = false; setIsProcessing(false); return; }
+    if (!isCurrent()) { isStartingEngine.current = false; return; }
+    const isLinux = platform === "linux";
+    const isWindows = platform === "windows";
+
 
     updateTrayTooltip("connecting");
 
@@ -561,7 +587,9 @@ function App() {
         } catch (_) {}
         childProcess.current = null;
     }
-    await clearProxy(true);
+    await cleanupTask.current;
+    if (!await clearProxy(true)) { isStartingEngine.current = false; setIsProcessing(false); return; }
+    if (!isCurrent()) { isStartingEngine.current = false; return; }
 
     // ✅ #3: configRef.current kullan — stale closure önlenir
     const currentDns = configRef.current.selectedDns;
@@ -585,80 +613,9 @@ function App() {
     isRetrying.current = false;
 
     try {
-      // ✅ Yeni 3-mod timeout sistemi: 0=Turbo, 1=Dengeli, 2=Güçlü
-      const TIMEOUT_MS = DPI_TIMEOUTS[configRef.current.dpiMethod] ?? 5000;
-
-      const listenAddr = `${bindAddr}:${port}`;
-
-      const args = isLinux
-        ? [
-            "--clean",
-            "--listen-addr", listenAddr,
-            "--tcp-timeout", TIMEOUT_MS.toString(),
-            "--no-tui",
-            "--log-level", "info",
-          ]
-        : [
-            "--clean",
-            "--listen-addr", listenAddr,
-            "--timeout", TIMEOUT_MS.toString(),
-            "--silent",
-            "--log-level", "info",
-          ];
-
-      // IPv4 Zorlaması (Sende çalışan stabil yapı)
-      if (configRef.current.ipv4Only !== false) {
-        args.push("--dns-qtype", "ipv4");
-      } else {
-        args.push("--dns-qtype", "all");
-      }
-
-      // DNS ayarı
-      if (currentDns === "system" || !dnsIP) {
-        args.push("--dns-mode", "system");
-      } else {
-        const dohUrl = DOH_MAP[currentDns];
-        if (dohUrl) {
-          args.push("--dns-mode", "https", "--dns-https-url", dohUrl);
-        } else {
-          args.push("--dns-addr", `${dnsIP}:53`, "--dns-mode", "udp");
-        }
-      }
-
-      // ========================================================
-      // SÜRÜCÜSÜZ (PORTABLE) DPI BYPASS
-      // Sadece 'chunk' modu ile Kablonet/Superonline geçilir.
-      // ========================================================
-      const dpiMethod = configRef.current.dpiMethod || "1";
-      const userChunk = [1, 2, 4, 8, 16].includes(Number(configRef.current.httpsChunkSize))
-        ? String(configRef.current.httpsChunkSize)
-        : "2";
-
-      // 🛑 Önemli: Sürücü kontrolü yap (Rust tarafındaki check_driver komutunu kullan)
       const hasDriver = isWindows ? await invoke('check_driver') : false;
-      
-      if (dpiMethod === "2") {
-        const advancedBypass = isWindows && configRef.current.advancedBypass !== false; // default true if driver installed
-        if (hasDriver && advancedBypass) {
-          // Sürücü var ve gelişmiş bypass açık: Fake packet ile en güçlü atlatma
-          args.push("--https-split-mode", "chunk", "--https-chunk-size", "1", "--https-fake-count", "3");
-          addLog(t.logStrongFake || "🚀 Güçlü Mod: Fake Paket (3) aktif.", "success");
-        } else {
-          // Sürücü yok veya gelişmiş bypass kapalı: Sadece Chunk 1
-          args.push("--https-split-mode", "chunk", "--https-chunk-size", "1");
-          if (isWindows && !hasDriver) {
-            addLog(t.logStrongNoDriver || "⚠️ Güçlü Mod: Sürücü yok, sadece Chunk-1 aktif.", "warn");
-          } else if (isWindows) {
-            addLog(t.logStrongChunkOnly || "🛡️ Güçlü Mod: Chunk-1 aktif.", "info");
-          } else {
-            addLog("Linux MVP: Güçlü Mod Chunk-1 ile çalışıyor. Sistem proxy uygulanamazsa manuel proxy kullanın.", "info");
-          }
-        }
-      } else if (dpiMethod === "1") {
-        args.push("--https-split-mode", "chunk", "--https-chunk-size", userChunk);
-      } else {
-        args.push("--https-split-mode", "sni");
-      }
+      if (!isCurrent()) { isStartingEngine.current = false; return; }
+      const args = buildEngineArgs({config: configRef.current, platform, host: bindAddr, port, hasDriver});
 
       const command = Command.sidecar("binaries/bypax-proxy", args);
 
@@ -682,6 +639,7 @@ function App() {
       };
 
       const completeConnection = async (source) => {
+        if (!isCurrent()) return false;
         if (connectionConfirmed) {
           addLog(`[connect] Frontend state update skipped (${source}); already connected.`, "info");
           return true;
@@ -705,19 +663,11 @@ function App() {
             proxyResult?.automatic ? "success" : "warn",
           );
         } catch (err) {
-          if (!isLinux) {
-            addLog(t.logProxySetError(err), "error", {
-              i18nKey: "logProxySetError",
-              i18nParams: [err],
-            });
-            return false;
-          }
-
-          addLog(
-            `[connect] Linux system proxy setup failed; continuing in manual mode at 127.0.0.1:${port}: ${err}`,
-            "warn",
-          );
+          addLog(t.logProxySetError(err), "error");
+          return false;
         }
+        if (!isCurrent()) { if (!childProcess.current) await clearProxy(true); return false; }
+        setProxyAutomatic(Boolean(proxyResult?.automatic));
 
         if (proxyResult?.automatic) {
           addLog(t.logProxySet(port), "success", {
@@ -742,7 +692,7 @@ function App() {
         userIntentDisconnect.current = false;
         connectionConfirmed = true;
 
-        addLog(`[connect] Frontend state update: connected (${source}).`, "success");
+        addLog(`[connect] Local proxy ready (${source}); site access is tested separately.`, "success");
         setIsConnected(true);
         setIsProcessing(false);
         addLog(t.logConnected, "success", { i18nKey: "logConnected" });
@@ -790,6 +740,7 @@ function App() {
         );
 
       const handleOutput = async (line, type) => {
+        if (session !== engineSession.current) return;
         const trimmedLine = line.trim();
         const lowerLine = line.toLowerCase();
 
@@ -919,7 +870,10 @@ function App() {
         }
       };
 
+      command.on("error", (error) => { if (isCurrent()) addLog(String(error), "error"); });
       command.on("close", (data) => {
+        if (session !== engineSession.current) return;
+        closed = true;
         if (!isRetrying.current) {
           const isUnexpectedClose = data.code !== 0 && data.code !== null;
 
@@ -932,7 +886,7 @@ function App() {
             setIsConnected(false);
             setIsProcessing(false);
             childProcess.current = null;
-            (async () => {
+            cleanupTask.current = (async () => {
               try {
                 await invoke("stop_pac_server");
                 await clearProxy(true);
@@ -967,7 +921,7 @@ function App() {
           setIsConnected(false);
           setIsProcessing(false);
           childProcess.current = null;
-          (async () => {
+          cleanupTask.current = (async () => {
             try {
               await invoke("stop_pac_server");
               await clearProxy(true);
@@ -1018,16 +972,29 @@ function App() {
       addLog("[connect] Sidecar spawn: binaries/bypax-proxy", "info");
       addLog(`[connect] Sidecar args: ${JSON.stringify(args)}`, "info");
       const child = await command.spawn();
+      if (!isCurrent()) {
+        await child.kill().catch(() => {});
+        isStartingEngine.current = false;
+        return;
+      }
       childProcess.current = child;
       addLog(`[connect] Sidecar spawned with pid=${child.pid ?? "unknown"}.`, "success");
-      invoke("save_sidecar_pid", { pid: child.pid }).catch(console.warn);
+      try { await invoke("save_sidecar_pid", { pid: child.pid }); }
+      catch (err) {
+        fatalErrorRef.current = true;
+        await child.kill().catch(() => {});
+        childProcess.current = null;
+        throw new Error(`Sidecar recovery registration failed: ${err}`);
+      }
       isStartingEngine.current = false; // Mülkiyeti childProcess'e devret
 
       if (isLinux) {
         (async () => {
           const healthy = await runLinuxProxyHealthCheck();
+          if (!isCurrent()) return;
           if (!healthy) {
             if (childProcess.current && !connectionConfirmed && !isRetrying.current) {
+              fatalErrorRef.current = true;
               childProcess.current.kill().catch(() => {});
               childProcess.current = null;
             }
@@ -1037,7 +1004,12 @@ function App() {
             return;
           }
 
-          await completeConnection("Linux proxy health check");
+          if (!await completeConnection("Linux proxy health check") && isCurrent()) {
+            fatalErrorRef.current = true;
+            await child.kill().catch(() => {});
+            childProcess.current = null;
+            setIsConnected(false); setIsProcessing(false);
+          }
         })();
       } else {
         // Failsafe timeout
@@ -1093,7 +1065,7 @@ function App() {
 
   const toggleConnection = async () => {
     // ✅ FIX: isProcessing VEYA restart sırasında toggle'ı engelle (race condition fix)
-    if (isProcessing || isRestartingDpi.current || isRestartingLan.current) return;
+    if (!startupReady || isProcessing || isRestartingDpi.current || isRestartingLan.current) return;
 
     if (isConnected) {
       if (configRef.current.requireConfirmation !== false) {
@@ -1107,6 +1079,7 @@ function App() {
 
       // ✅ Kullanıcı kasıtlı olarak bağlantıyı kesiyor
       userIntentDisconnect.current = true;
+      engineSession.current++;
 
       // Retry timer varsa iptal et
       if (retryTimer.current) {
@@ -1194,6 +1167,7 @@ function App() {
 
     // Manuel restart: auto-reconnect karışmasın
     userIntentDisconnect.current = true;
+      engineSession.current++;
     if (retryTimer.current) {
       clearTimeout(retryTimer.current);
       retryTimer.current = null;
@@ -1210,7 +1184,11 @@ function App() {
     })();
     setIsConnected(false);
 
+    const restartSession = engineSession.current;
     setTimeout(() => {
+      if (restartSession !== engineSession.current || isAppClosingRef.current) {
+        isRestartingLan.current = false; isRestartingDpi.current = false; setIsApplyingSettings(false); return;
+      }
       userIntentDisconnect.current = false;
       isRestartingLan.current = false;
       setIsProcessing(true);
@@ -1227,6 +1205,7 @@ function App() {
     const ipv4 = config.ipv4Only !== false;
     if (
       prevDpiMethodRef.current === config.dpiMethod &&
+      prevRecordSplitRef.current === config.linuxTlsRecordSplit &&
       prevChunkSizeRef.current === chunkSize &&
       prevSelectedDnsRef.current === config.selectedDns &&
       prevDnsModeRef.current === config.dnsMode &&
@@ -1235,6 +1214,7 @@ function App() {
     )
       return;
     prevDpiMethodRef.current = config.dpiMethod;
+    prevRecordSplitRef.current = config.linuxTlsRecordSplit;
     prevChunkSizeRef.current = chunkSize;
     prevSelectedDnsRef.current = config.selectedDns;
     prevDnsModeRef.current = config.dnsMode;
@@ -1251,6 +1231,7 @@ function App() {
     updateTrayTooltip("connecting");
 
     userIntentDisconnect.current = true;
+      engineSession.current++;
     if (retryTimer.current) {
       clearTimeout(retryTimer.current);
       retryTimer.current = null;
@@ -1262,49 +1243,38 @@ function App() {
     }
     setIsConnected(false);
 
+    const restartSession = engineSession.current;
     setTimeout(() => {
+      if (restartSession !== engineSession.current || isAppClosingRef.current) {
+        isRestartingLan.current = false; isRestartingDpi.current = false; setIsApplyingSettings(false); return;
+      }
       userIntentDisconnect.current = false;
       isRestartingDpi.current = false;
       setIsApplyingSettings(false);
       setIsProcessing(true);
       startEngine(0);
     }, 2500); // Portun serbest kalması için (SpoofDPI 1.2.1 / TIME_WAIT)
-  }, [config.dpiMethod, config.httpsChunkSize, config.selectedDns, config.dnsMode, config.enableWinhttp, config.ipv4Only, isConnected, isWindows]);
+  }, [config.linuxTlsRecordSplit, config.dpiMethod, config.httpsChunkSize, config.selectedDns, config.dnsMode, config.enableWinhttp, config.ipv4Only, isConnected, isWindows]);
 
   useEffect(() => {
-    // Initial cleanup on mount
-    (async () => {
-      try {
-        // P0-FIX-1: Crash/BSOD sonrası kalan proxy ayarlarını sentinel ile tespit edip temizle
-        const wasDirty = await invoke("startup_proxy_cleanup").catch((e) => {
-          console.warn("Startup proxy cleanup:", e);
-          return false;
-        });
-        if (wasDirty) {
-          addLog("⚠️ Önceki oturum düzgün kapanmamış — proxy ayarları temizlendi", "warn", {
-            i18nKey: "logDirtyShutdownRecovery",
-          });
-        }
-
-        // ✅ Sorun 4: Zombi süreçleri temizle (önceki çökme/force kill sonrası kalmış olabilir)
-        await invoke("kill_zombie_sidecar").catch((e) =>
-          console.log("Zombi temizleme:", e)
-        );
-        // ✅ Sorun 1: Proxy'yi temizle (çökme sonrası kalıntı)
-        await clearProxy(true);
-        updateTrayTooltip("disconnected");
-
-        // P1-FIX: Auto-Connect Race Condition çözümü (Temizlik adımları tamamlandıktan SONRA bağlan)
-        // ✅ İlk giriş overlay'ı açıksa auto-connect yapma — kullanıcı ISS seçsin önce
-        const isFirstRun = !localStorage.getItem('bypax_first_run_done');
-        if (configRef.current.autoConnect && !childProcess.current && !isFirstRun) {
-          setIsProcessing(true);
-          startEngine(8080);
-        }
-      } catch (e) {
-        console.error("Initial cleanup failed:", e);
+    let disposed = false;
+    if (!startupTask.current) {
+      startupTask.current = (async () => {
+        const wasDirty = await invoke("startup_proxy_cleanup");
+        if (wasDirty) addLog("Previous proxy settings restored after an interrupted session.", "warn");
+        await invoke("kill_zombie_sidecar");
+      })();
+    }
+    startupTask.current.then(() => {
+      if (disposed) return;
+      setStartupReady(true);
+      updateTrayTooltip("disconnected");
+      const firstRun = !localStorage.getItem('bypax_first_run_done');
+      if (configRef.current.autoConnect && !childProcess.current && !firstRun) {
+        setIsProcessing(true);
+        startEngine(0);
       }
-    })();
+    }).catch((err) => { if (!disposed) addLog(`Startup recovery failed: ${err}`, "error"); });
 
     // Listen for window close event
     const initListener = async () => {
@@ -1349,6 +1319,7 @@ function App() {
 
         isExiting.current = true;
         userIntentDisconnect.current = true;
+      engineSession.current++;
         setAppIsClosingState(true);
 
         // ✅ Timer'ı temizle
@@ -1391,43 +1362,16 @@ function App() {
     };
 
     let unlistenFn;
-    initListener().then((fn) => (unlistenFn = fn));
+    initListener().then((fn) => {
+      if (disposed) { fn.unlisten(); fn.unlistenTrayQuit(); }
+      else unlistenFn = fn;
+    }).catch(console.error);
 
     return () => {
-      if (unlistenFn) {
-        if (unlistenFn.unlisten) unlistenFn.unlisten();
-        if (unlistenFn.unlistenTrayQuit) unlistenFn.unlistenTrayQuit();
-      }
-
-      // ✅ Retry timer'ı temizle
-      if (retryTimer.current) {
-        clearTimeout(retryTimer.current);
-        retryTimer.current = null;
-      }
-
-      // Cleanup on unmount
-      const cleanup = async () => {
-        isAppClosingRef.current = true;
-        userIntentDisconnect.current = true; // prevent false notifications on reload/close
-        try {
-          await invoke("stop_pac_server");
-        } catch (_) {}
-        if (childProcess.current) {
-          try {
-            await childProcess.current.kill();
-            childProcess.current = null;
-          } catch (e) {
-            console.error("Process kill failed:", e);
-          }
-        }
-        try {
-          await invoke("clear_system_proxy");
-        } catch (e) {
-          console.error("Proxy cleanup failed:", e);
-        }
-      };
-
-      cleanup();
+      disposed = true;
+      if (unlistenFn) { unlistenFn.unlisten(); unlistenFn.unlistenTrayQuit(); }
+      if (retryTimer.current) { clearTimeout(retryTimer.current); retryTimer.current = null; }
+      // Native exit/destroy owns final cleanup. Effect replay must not stop a live engine.
     };
   }, []);
 
@@ -1447,7 +1391,8 @@ function App() {
     // ✅ Flag'i set et — onCloseRequested'ın tekrar modal göstermesini engeller
     isExiting.current = true;
     isAppClosingRef.current = true;
-    userIntentDisconnect.current = true; // Reconnect engelle
+    userIntentDisconnect.current = true;
+      engineSession.current++; // Reconnect engelle
     setAppIsClosingState(true);
     addLog(t.logShutdownStarting, "warn", { i18nKey: "logShutdownStarting" });
 
@@ -1496,9 +1441,10 @@ function App() {
     const handleForceDisconnect = async (e) => {
       console.log('[FORCE-DISCONNECT]', e.detail?.reason);
       
-      // Bağlıysa kes
+      userIntentDisconnect.current = true;
+      engineSession.current++;
+      if (retryTimer.current) { clearTimeout(retryTimer.current); retryTimer.current = null; }
       if (childProcess.current) {
-        userIntentDisconnect.current = true;
         try {
           await invoke('stop_pac_server');
           await childProcess.current.kill();
@@ -1894,7 +1840,9 @@ function App() {
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
-              justifyContent: "center",
+              justifyContent: "flex-start",
+              overflowY: "auto",
+              boxSizing: "border-box",
               textAlign: "center",
               padding: "1.5rem",
             }}
@@ -1907,22 +1855,28 @@ function App() {
               pointerEvents: "none", zIndex: 0,
             }} />
 
-            <div style={{ zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", maxWidth: "420px", width: "100%" }}>
+            <div style={{ zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0, maxWidth: "420px", width: "100%" }}>
               <img src="/bypax-logo.png" alt={APP.name} style={{ width: "56px", height: "56px", marginBottom: "1rem", borderRadius: "12px", boxShadow: "0 8px 32px rgba(0, 0, 0, 0.3)" }} />
-              <h1 style={{ fontSize: "1.25rem", marginBottom: "0.5rem", color: "#fff", fontWeight: "700" }}>{t.issOverlayTitle}</h1>
-              <p style={{ color: "#a1a1aa", marginBottom: "1.25rem", lineHeight: "1.5", fontSize: "0.85rem" }}>{t.issOverlayDesc}</p>
+              <h1 style={{ fontSize: "1.25rem", marginBottom: "0.5rem", color: "#fff", fontWeight: "700" }}>{isLinux ? (config.language === 'en' ? 'Connection method' : 'Bağlantı yöntemi') : t.issOverlayTitle}</h1>
+              <p style={{ color: "#a1a1aa", marginBottom: "1.25rem", lineHeight: "1.5", fontSize: "0.85rem" }}>{isLinux ? (config.language === 'en' ? 'Start with the recommended method, then test access from the app.' : 'Önerilen yöntemle başlayın, ardından uygulama içinden erişimi test edin.') : t.issOverlayDesc}</p>
 
               <div style={{ display: "flex", flexDirection: "column", gap: "8px", width: "100%", marginBottom: "1.25rem" }}>
+                {isLinux && <button type="button" className="record-mode-choice" aria-pressed={config.linuxTlsRecordSplit !== false}
+                  onClick={() => updateConfig({ linuxTlsRecordSplit: true, selectedIspProfile: 'custom' })}>
+                  <strong>{config.language === 'en' ? 'TLS record splitting (recommended)' : 'TLS kayıt bölme (önerilen)'}</strong>
+                  <span>{config.language === 'en' ? 'For sites where TLS connections reset. You can change the method in settings.' : 'TLS bağlantısı kesilen siteler için. Yöntemi ayarlardan değiştirebilirsiniz.'}</span>
+                </button>}
                 {ISP_PROFILES.map((isp) => {
                   const nameKey = `iss${isp.id.charAt(0).toUpperCase() + isp.id.slice(1)}Name`;
                   const ispName = t[nameKey] || isp.id;
-                  const isSelected = config.selectedIspProfile === isp.id;
+                  const isSelected = !(isLinux && config.linuxTlsRecordSplit) && config.selectedIspProfile === isp.id;
                   return (
                     <motion.div
                       key={isp.id}
                       whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.98 }}
                       onClick={() => {
+                        updateConfig('linuxTlsRecordSplit', false);
                         updateConfig('dpiMethod', isp.mode);
                         updateConfig('httpsChunkSize', isp.chunk);
                         updateConfig('selectedIspProfile', isp.id);
@@ -1974,7 +1928,7 @@ function App() {
                   localStorage.setItem('bypax_first_run_done', 'true');
                   setShowFirstRunISS(false);
                   // Otomatik bağlan
-                  if (!isConnected && !isProcessing) {
+                  if (startupReady && !isConnected && !isProcessing) {
                     retryCount.current = 0;
                     userIntentDisconnect.current = false;
                     setIsProcessing(true);
@@ -2099,14 +2053,14 @@ function App() {
                 ? t.statusDisconnecting
                 : t.statusConnecting
               : isConnected
-                ? t.statusConnected
+                ? (isLinux ? (config.language === "en" ? "Proxy ready" : "Proxy hazır") : t.statusConnected)
                 : t.statusReady2}
           </h1>
           <p className="status-desc">
             {isProcessing
               ? t.descConnecting
               : isConnected
-                ? t.descConnected
+                ? (isLinux ? (config.language === "en" ? "Check site access with the test below." : "Site erişimini aşağıdaki testle doğrula.") : t.descConnected)
                 : t.descReady}
           </p>
 
@@ -2186,7 +2140,7 @@ function App() {
         <button
           className={`main-btn ${isConnected ? "disconnect" : "connect"} ${isProcessing ? "processing" : ""}`}
           onClick={toggleConnection}
-          disabled={isProcessing || isRestartingDpi.current || isRestartingLan.current}
+          disabled={!startupReady || isProcessing || isRestartingDpi.current || isRestartingLan.current}
         >
           <Power size={22} strokeWidth={2.5} />
           <span>
@@ -2201,6 +2155,7 @@ function App() {
                   : t.btnConnect}
           </span>
         </button>
+        {isLinux && <ConnectionDiagnostics connected={isConnected} port={currentPort} automatic={proxyAutomatic} language={config.language} onSetup={() => { setConnectionModalTab("manual"); setShowConnectionModal(true); }} />}
       </div>
 
       {/* Project Links — animasyonlu giriş/çıkış */}
@@ -2381,17 +2336,18 @@ function App() {
                       marginBottom: "2px",
                     }}
                   >
-                    {t.modalTitle}
+                    {localProxyInstructions ? (config.language === "en" ? "Application proxy" : "Uygulama proxy ayarı") : t.modalTitle}
                   </h2>
                   <p
                     style={{ fontSize: "0.8rem", color: "#94a3b8", margin: 0 }}
                   >
-                    {t.modalSubtitle}
+                    {localProxyInstructions ? (config.language === "en" ? "On this computer" : "Bu bilgisayar için") : t.modalSubtitle}
                   </p>
                 </div>
                 <button
                   className="close-btn"
                   onClick={() => setShowConnectionModal(false)}
+                  aria-label={config.language === "en" ? "Close proxy settings" : "Proxy ayarını kapat"}
                   style={{
                     position: "absolute",
                     right: "-5px",
@@ -2425,8 +2381,8 @@ function App() {
               </div>
 
               <div className="modal-body">
-                {/* Sekmeler */}
-                <div
+                {/* PAC is only available when LAN sharing has actually started. */}
+                {config.lanSharing && <div
                   style={{
                     display: "flex",
                     gap: "4px",
@@ -2480,9 +2436,9 @@ function App() {
                   >
                     {t.modalTabManual}
                   </button>
-                </div>
+                </div>}
 
-                {connectionModalTab === "pac" && (
+                {config.lanSharing && connectionModalTab === "pac" && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', marginBottom: '0.5rem' }}>
                     {/* Note */}
                     <div style={{
@@ -2572,7 +2528,7 @@ function App() {
                     }}>
                         <AlertTriangle size={18} color="#f87171" style={{ flexShrink: 0, marginTop: '1px' }} />
                         <div style={{ fontSize: '0.75rem', color: '#fca5a5', lineHeight: 1.4 }}>
-                           <strong style={{ color: '#ef4444' }}>{t.modalManualWarningTitle}</strong> {t.modalManualWarningDesc}
+                           <strong style={{ color: '#ef4444' }}>{t.modalManualWarningTitle}</strong> {localProxyInstructions ? (config.language === "en" ? "Restore the application’s previous proxy settings when you stop BypaxDPI." : "BypaxDPI’yi durdurduğunda uygulamanın proxy ayarını önceki haline getir.") : t.modalManualWarningDesc}
                         </div>
                     </div>
                     <p
@@ -2583,7 +2539,7 @@ function App() {
                         marginBottom: "1rem",
                       }}
                     >
-                      <span dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(t.modalDesc, PURIFY_CONFIG) }} />
+                      {localProxyInstructions ? (config.language === "en" ? "Set this address as the HTTP and HTTPS proxy in your browser. KDE apps may require their own proxy setting." : "Tarayıcının HTTP ve HTTPS proxy ayarlarına bu adresi gir. KDE’de her uygulamanın proxy ayarını ayrıca yapman gerekebilir.") : <span dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(t.modalDesc, PURIFY_CONFIG) }} />}
                     </p>
                     <div
                       style={{
@@ -2609,11 +2565,11 @@ function App() {
                         </label>
                         <div
                           className="code-box"
-                          onClick={() => handleCopyField(manualProxyHost, 'host')}
+                          onClick={() => handleCopyField(config.lanSharing ? lanIp : manualProxyHost, 'host')}
                           title="Kopyala"
                           style={{ transition: 'all 0.2s', background: copiedField === 'host' ? 'rgba(34, 197, 94, 0.1)' : undefined, borderColor: copiedField === 'host' ? 'rgba(34, 197, 94, 0.3)' : undefined }}
                         >
-                          <span style={{ color: copiedField === 'host' ? '#4ade80' : undefined }}>{manualProxyHost}</span>
+                          <span style={{ color: copiedField === 'host' ? '#4ade80' : undefined }}>{config.lanSharing ? lanIp : manualProxyHost}</span>
                           {copiedField === 'host' ? <Check size={16} color="#4ade80" /> : <Copy size={16} color="#71717a" />}
                         </div>
                       </div>
@@ -2645,6 +2601,10 @@ function App() {
                   </>
                 )}
 
+                {localProxyInstructions && <p style={{color:"#94a3b8", fontSize:"0.75rem", marginBottom:12}}>
+                  {config.language === "en" ? "For Discord desktop, fully quit it, then launch with:" : "Discord masaüstünü tamamen kapatıp şu parametreyle başlat:"}<br />
+                  <code style={{userSelect:"text",overflowWrap:"anywhere"}}>discord --proxy-server=http://127.0.0.1:{currentPort}</code>
+                </p>}
                 <button
                   style={{
                     width: "100%",

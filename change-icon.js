@@ -7,6 +7,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function main() {
+    if (process.platform !== "win32") return;
     const exePath = path.join(__dirname, 'src-tauri', 'binaries', 'bypax-proxy-x86_64-pc-windows-msvc.exe');
     const pngPath = path.join(__dirname, 'public', 'bypax-engine.png');
     const iconPath = path.join(__dirname, 'src-tauri', 'icons', 'bypax-engine.ico');

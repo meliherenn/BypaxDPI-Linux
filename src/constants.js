@@ -37,7 +37,7 @@ export const DOH_MAP = {
 // ===== Uygulama Sabitleri =====
 export const APP = {
   name: "BypaxDPI Linux",
-  version: "1.0.0",
+  version: "0.1.0",
   designWidth: 380,
   designHeight: 700,
   maxLogs: 100,

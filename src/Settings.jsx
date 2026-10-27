@@ -29,6 +29,8 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies,
   const [activeTab, setActiveTab] = useState('general');
   const scrollRef = useRef(null);
   const isWindows = platform === 'windows';
+  const recordActive = platform === 'linux' && config.linuxTlsRecordSplit !== false;
+  const activeMethod = recordActive ? 'record' : config.dpiMethod;
 
   const[expandedISP, setExpandedISP] = useState(null);
   const [driverInstalled, setDriverInstalled] = useState(false);
@@ -356,7 +358,7 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies,
                       desc: t[descKey] || '',
                       icon: ICON_MAP[isp.id] || <Globe size={18} />,
                     };
-                    const isApplied = config.dpiMethod === ispData.mode && 
+                    const isApplied = activeMethod === ispData.mode &&
                                      Number(config.httpsChunkSize) === Number(ispData.chunk);
                     const isExpanded = expandedISP === ispData.id;
 
@@ -426,6 +428,7 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies,
                                   <button
                                     onClick={() => {
                                       updateConfig({
+                                        linuxTlsRecordSplit: false,
                                         dpiMethod: ispData.mode,
                                         httpsChunkSize: ispData.chunk,
                                         selectedIspProfile: ispData.id
@@ -462,21 +465,26 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies,
               <div className="v2-section">
                 <div className="v2-section-title">{t.sectionBypass}</div>
                 <div className="v2-card">
+                    {platform === 'linux' && <button type="button" className="record-mode-choice" aria-pressed={recordActive}
+                      onClick={() => updateConfig({ linuxTlsRecordSplit: true, selectedIspProfile: 'custom' })}>
+                      <strong>{lang === 'en' ? 'TLS record splitting' : 'TLS kayıt bölme'}</strong>
+                      <span>{lang === 'en' ? 'Recommended for this network. Splits the TLS record inside the hostname; DNS settings still apply.' : 'Bu ağ için önerilen yöntem. TLS kaydını alan adı içinde böler; DNS ayarları uygulanmaya devam eder.'}</span>
+                    </button>}
                     {/* Turbo Mod */}
                     <div 
-                      className={`v2-item hover-effect ${config.dpiMethod === '0' ? 'v2-selected' : ''}`}
-                      style={{ background: config.dpiMethod === '0' ? 'rgba(234, 179, 8, 0.1)' : 'transparent', opacity: config.dpiMethod === '0' ? 1 : 0.5, cursor: 'pointer', transition: 'all 0.2s ease' }}
-                      onClick={() => { updateConfig({ dpiMethod: '0', httpsChunkSize: 4, selectedIspProfile: 'custom' }); }}
+                      className={`v2-item hover-effect ${activeMethod === '0' ? 'v2-selected' : ''}`}
+                      style={{ background: activeMethod === '0' ? 'rgba(234, 179, 8, 0.1)' : 'transparent', opacity: activeMethod === '0' ? 1 : 0.5, cursor: 'pointer', transition: 'all 0.2s ease' }}
+                      onClick={() => { updateConfig({ linuxTlsRecordSplit: false, dpiMethod: '0', httpsChunkSize: 4, selectedIspProfile: 'custom' }); }}
                     >
-                      <div className="v2-icon yellow" style={{ background: config.dpiMethod === '0' ? 'rgba(234, 179, 8, 0.2)' : '' }}>
-                        <Activity size={20} className={config.dpiMethod === '0' ? 'active-icon' : ''} />
+                      <div className="v2-icon yellow" style={{ background: activeMethod === '0' ? 'rgba(234, 179, 8, 0.2)' : '' }}>
+                        <Activity size={20} className={activeMethod === '0' ? 'active-icon' : ''} />
                       </div>
                       <div className="v2-item-text">
-                        <h3 style={{ color: config.dpiMethod === '0' ? '#facc15' : '' }}>{t.modeTurboName}</h3>
-                        <p>{t.modeTurboDesc}</p>
+                        <h3 style={{ color: activeMethod === '0' ? '#facc15' : '' }}>{t.modeTurboName}</h3>
+                        <p>{platform === 'linux' ? (lang === 'en' ? 'Splits TCP data at the hostname boundary.' : 'TCP verisini alan adı sınırında böler.') : t.modeTurboDesc}</p>
                       </div>
-                      <div className={`v2-radio ${config.dpiMethod === '0' ? 'on' : ''}`}>
-                         {config.dpiMethod === '0' && <div className="v2-radio-dot" />}
+                      <div className={`v2-radio ${activeMethod === '0' ? 'on' : ''}`}>
+                         {activeMethod === '0' && <div className="v2-radio-dot" />}
                       </div>
                     </div>
 
@@ -484,19 +492,19 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies,
 
                     {/* Dengeli Mod */}
                     <div 
-                      className={`v2-item hover-effect ${config.dpiMethod === '1' ? 'v2-selected' : ''}`}
-                      style={{ background: config.dpiMethod === '1' ? 'rgba(34, 197, 94, 0.1)' : 'transparent', opacity: config.dpiMethod === '1' ? 1 : 0.5, cursor: 'pointer', transition: 'all 0.2s ease' }}
-                      onClick={() => { updateConfig({ dpiMethod: '1', httpsChunkSize: 2, selectedIspProfile: 'custom' }); }}
+                      className={`v2-item hover-effect ${activeMethod === '1' ? 'v2-selected' : ''}`}
+                      style={{ background: activeMethod === '1' ? 'rgba(34, 197, 94, 0.1)' : 'transparent', opacity: activeMethod === '1' ? 1 : 0.5, cursor: 'pointer', transition: 'all 0.2s ease' }}
+                      onClick={() => { updateConfig({ linuxTlsRecordSplit: false, dpiMethod: '1', httpsChunkSize: 2, selectedIspProfile: 'custom' }); }}
                     >
-                      <div className="v2-icon green" style={{ background: config.dpiMethod === '1' ? 'rgba(34, 197, 94, 0.2)' : '' }}>
-                        <Zap size={20} className={config.dpiMethod === '1' ? 'active-icon' : ''} />
+                      <div className="v2-icon green" style={{ background: activeMethod === '1' ? 'rgba(34, 197, 94, 0.2)' : '' }}>
+                        <Zap size={20} className={activeMethod === '1' ? 'active-icon' : ''} />
                       </div>
                       <div className="v2-item-text">
-                        <h3 style={{ color: config.dpiMethod === '1' ? '#4ade80' : '' }}>{t.modeBalancedName}</h3>
-                        <p>{t.modeBalancedDesc}</p>
+                        <h3 style={{ color: activeMethod === '1' ? '#4ade80' : '' }}>{t.modeBalancedName}</h3>
+                        <p>{platform === 'linux' ? (lang === 'en' ? 'Splits TCP data using the selected chunk size.' : 'TCP verisini seçtiğiniz parça boyutuyla böler.') : t.modeBalancedDesc}</p>
                       </div>
-                      <div className={`v2-radio ${config.dpiMethod === '1' ? 'on' : ''}`}>
-                         {config.dpiMethod === '1' && <div className="v2-radio-dot" />}
+                      <div className={`v2-radio ${activeMethod === '1' ? 'on' : ''}`}>
+                         {activeMethod === '1' && <div className="v2-radio-dot" />}
                       </div>
                     </div>
 
@@ -504,30 +512,30 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies,
 
                    {/* Güçlü Mod*/}
                     <div 
-                      className={`v2-item hover-effect ${config.dpiMethod === '2' ? 'v2-selected' : ''}`}
+                      className={`v2-item hover-effect ${activeMethod === '2' ? 'v2-selected' : ''}`}
                       style={{ 
-                        background: config.dpiMethod === '2' ? 'rgba(59, 130, 246, 0.1)' : 'transparent',
-                        opacity: config.dpiMethod === '2' ? 1 : 0.5,
+                        background: activeMethod === '2' ? 'rgba(59, 130, 246, 0.1)' : 'transparent',
+                        opacity: activeMethod === '2' ? 1 : 0.5,
                         cursor: 'pointer',
                         transition: 'all 0.2s ease'
                       }}
-                      onClick={() => { updateConfig({ dpiMethod: '2', httpsChunkSize: 1, selectedIspProfile: 'custom' }); }}
+                      onClick={() => { updateConfig({ linuxTlsRecordSplit: false, dpiMethod: '2', httpsChunkSize: 1, selectedIspProfile: 'custom' }); }}
                     >
-                      <div className="v2-icon blue" style={{ background: config.dpiMethod === '2' ? 'rgba(59, 130, 246, 0.2)' : '' }}>
-                        <Shield size={20} className={config.dpiMethod === '2' ? 'active-icon' : ''} />
+                      <div className="v2-icon blue" style={{ background: activeMethod === '2' ? 'rgba(59, 130, 246, 0.2)' : '' }}>
+                        <Shield size={20} className={activeMethod === '2' ? 'active-icon' : ''} />
                       </div>
                       <div className="v2-item-text">
-                        <h3 style={{ color: config.dpiMethod === '2' ? '#60a5fa' : '' }}>{t.modeStrongName}</h3>
-                        <p>{t.modeStrongDesc}</p>
+                        <h3 style={{ color: activeMethod === '2' ? '#60a5fa' : '' }}>{t.modeStrongName}</h3>
+                        <p>{platform === 'linux' ? (lang === 'en' ? 'TCP splitting with a longer connection timeout.' : 'Daha uzun bağlantı süresiyle TCP parçalama.') : t.modeStrongDesc}</p>
                       </div>
-                      <div className={`v2-radio ${config.dpiMethod === '2' ? 'on' : ''}`}>
-                         {config.dpiMethod === '2' && <div className="v2-radio-dot" />}
+                      <div className={`v2-radio ${activeMethod === '2' ? 'on' : ''}`}>
+                         {activeMethod === '2' && <div className="v2-radio-dot" />}
                       </div>
                     </div>
 
                     {/* Npcap Gelişmiş Bypass — Güçlü Mod altında */}
                     <AnimatePresence>
-                      {isWindows && config.dpiMethod === '2' && (
+                      {isWindows && activeMethod === '2' && (
                         <motion.div
                           initial={{ opacity: 0, height: 0 }}
                           animate={{ opacity: 1, height: 'auto' }}
@@ -646,15 +654,15 @@ const Settings = ({ onBack, config, updateConfig, dnsLatencies, setDnsLatencies,
                     </AnimatePresence>
 
                     {/* Chunk size Seçimi */}
-                    {(config.dpiMethod === '1' || config.dpiMethod === '2') && (
+                    {(activeMethod === '1' || activeMethod === '2') && (
                       <>
                         <div className="v2-divider" />
                         <div style={{ display: 'flex', width: '100%', padding: '6px 12px', boxSizing: 'border-box' }}>
                           {CHUNK_SIZES.map((opt) => {
                             const fallbackChunk = DEFAULT_CHUNKS[config.dpiMethod] || 2;
                             const isSelected = Number(config.httpsChunkSize || fallbackChunk) === opt.value;
-                            const accentColor = config.dpiMethod === '2' ? '#60a5fa' : '#4ade80';
-                            const accentBg = config.dpiMethod === '2' ? 'rgba(59, 130, 246, 0.18)' : 'rgba(34, 197, 94, 0.18)';
+                            const accentColor = activeMethod === '2' ? '#60a5fa' : '#4ade80';
+                            const accentBg = activeMethod === '2' ? 'rgba(59, 130, 246, 0.18)' : 'rgba(34, 197, 94, 0.18)';
                             return (
                               <button
                                 key={opt.value}

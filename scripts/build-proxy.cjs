@@ -1,69 +1,37 @@
 #!/usr/bin/env node
-/**
- * Build SpoofDPI 1.2.1 (bypax-proxy) and copy to spoofdpi/ and src-tauri/binaries/.
- * Requires Go in PATH.
- */
-const { spawnSync } = require('child_process');
-const path = require('path');
-const fs = require('fs');
-
+// Build the pinned, patched Linux engine; retain compatible Windows packaging.
+const { spawnSync } = require('node:child_process');
+const path = require('node:path');
+const fs = require('node:fs');
+const { targetInfo, hostTriple, findOnPath, checkCompatibility } = require('./proxy-utils.cjs');
+const { buildPatchedLinux } = require('./patched-engine.cjs');
 const root = path.resolve(__dirname, '..');
-const spoofDpiDir = path.join(root, 'SpoofDPI-1.2.1', 'SpoofDPI-1.2.1');
-const isWindows = process.platform === 'win32';
-const targetTriple = process.env.TAURI_TARGET_TRIPLE
-  || process.env.TARGET_TRIPLE
-  || (isWindows ? 'x86_64-pc-windows-msvc' : 'x86_64-unknown-linux-gnu');
-const outName = isWindows ? 'bypax-proxy.exe' : 'bypax-proxy';
-const outFile = path.join(root, 'spoofdpi', outName);
-
-const spoofdpiDir = path.join(root, 'spoofdpi');
-if (!fs.existsSync(spoofdpiDir)) {
-  fs.mkdirSync(spoofdpiDir, { recursive: true });
-}
-
-const spoofDpiSourceExists = fs.existsSync(path.join(spoofDpiDir, 'go.mod'));
-if (spoofDpiSourceExists) {
-  console.log(`Building SpoofDPI (bypax-proxy) for ${targetTriple} with release flags...`);
-  const go = spawnSync('go', ['build', '-trimpath', '-ldflags=-s -w', '-o', outFile, './cmd/spoofdpi'], {
-    cwd: spoofDpiDir,
-    stdio: 'inherit',
-    shell: true,
+try {
+  const target = targetInfo(process.env.TAURI_TARGET_TRIPLE || process.env.TARGET_TRIPLE || hostTriple());
+  const source = process.env.SPOOFDPI_SOURCE_DIR || path.join(root, 'SpoofDPI-1.2.1', 'SpoofDPI-1.2.1');
+  const output = path.join(root, 'spoofdpi', `bypax-proxy${target.extension}`);
+  fs.mkdirSync(path.dirname(output), { recursive: true });
+  const temporary = `${output}.building${target.extension}`;
+  try {
+    if (target.os === 'linux') {
+      buildPatchedLinux(root, temporary, target);
+    } else if (fs.existsSync(path.join(source, 'go.mod'))) {
+      const result = spawnSync('go', ['build', '-trimpath', '-ldflags=-s -w', '-o', temporary, './cmd/spoofdpi'], {
+        cwd: source, stdio: 'inherit', env: { ...process.env, GOOS: target.os, GOARCH: target.arch, CGO_ENABLED: '0' },
+      });
+      if (result.error || result.status !== 0) throw new Error(`go build failed: ${result.error || result.status}`);
+    } else {
+      if (target.triple !== hostTriple()) throw new Error('Cross-compilation requires SPOOFDPI_SOURCE_DIR; an installed binary cannot be relabeled for another target');
+      const installed = findOnPath(target.os === 'windows' ? 'spoofdpi.exe' : 'spoofdpi');
+      if (!installed) throw new Error('Install SpoofDPI or set SPOOFDPI_SOURCE_DIR to an upstream checkout');
+      fs.copyFileSync(installed, temporary);
+    }
+    if (target.os === 'linux') fs.chmodSync(temporary, 0o755);
+    checkCompatibility(temporary, target);
+    fs.renameSync(temporary, output);
+  } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
+  const result = spawnSync(process.execPath, [path.join(__dirname, 'copy-proxy.cjs')], {
+    cwd: root, stdio: 'inherit', env: { ...process.env, TAURI_TARGET_TRIPLE: target.triple },
   });
-
-  if (go.status !== 0) {
-    console.error('go build failed');
-    process.exit(go.status || 1);
-  }
-} else if (!isWindows) {
-  const which = spawnSync('command', ['-v', 'spoofdpi'], {
-    shell: true,
-    encoding: 'utf8',
-  });
-  const systemSpoofDpi = which.stdout.trim();
-
-  if (!systemSpoofDpi) {
-    console.error('SpoofDPI source not found at', spoofDpiDir);
-    console.error('System spoofdpi binary not found in PATH. Install spoofdpi or provide SpoofDPI source before packaging.');
-    process.exit(1);
-  }
-
-  console.log(`SpoofDPI source not found at ${spoofDpiDir}`);
-  console.log(`Using system spoofdpi binary for Linux sidecar: ${systemSpoofDpi}`);
-  fs.copyFileSync(systemSpoofDpi, outFile);
-} else {
-  console.error('SpoofDPI source not found at', spoofDpiDir);
-  process.exit(1);
-}
-
-if (!isWindows) {
-  fs.chmodSync(outFile, 0o755);
-}
-
-console.log('Build OK:', outFile);
-console.log('Copying to src-tauri/binaries/...');
-const copy = spawnSync('node', [path.join(__dirname, 'copy-proxy.cjs')], {
-  cwd: root,
-  stdio: 'inherit',
-  env: { ...process.env, TAURI_TARGET_TRIPLE: targetTriple },
-});
-process.exit(copy.status || 0);
+  if (result.error || result.status !== 0) throw new Error(`Sidecar copy failed: ${result.error || result.status}`);
+} catch (error) { console.error(error.message); process.exitCode = 1; }

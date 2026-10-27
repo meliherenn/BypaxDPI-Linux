@@ -1,6 +1,23 @@
 {
   "bundle": {
-    "resources": [],
-    "targets": ["deb", "rpm"]
+    "resources": [
+      "../engine-patches/LICENSE.spoofdpi"
+    ],
+    "targets": [
+      "deb",
+      "rpm"
+    ],
+    "linux": {
+      "deb": {
+        "depends": [
+          "curl"
+        ]
+      },
+      "rpm": {
+        "depends": [
+          "curl"
+        ]
+      }
+    }
   }
 }

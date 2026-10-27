@@ -10,7 +10,9 @@
     "tauri": "tauri",
     "update-proxy-icon": "node change-icon.js",
     "copy-proxy": "node scripts/copy-proxy.cjs",
-    "build-proxy": "node scripts/build-proxy.cjs"
+    "build-proxy": "node scripts/build-proxy.cjs",
+    "test": "node --test tests/*.test.cjs",
+    "check": "npm test && npm run build && cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && cargo test --manifest-path src-tauri/Cargo.toml --lib --locked"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",
